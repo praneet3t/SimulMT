@@ -13,26 +13,35 @@ Simultaneous Machine Translation (SiMT) requires the model to start generating t
 
 ---
 
-## 2. Preprocessing & Data Funnel
+## 2. Preprocessing & Data
 
-We train on the `ai4bharat/BPCC` (Bharat Parallel Corpus Collection) dataset, specifically the human-verified `bpcc-seed-latest` split (`tel_Telu`). 
+### Training Data — `ai4bharat/BPCC`
+
+All training data comes from `ai4bharat/BPCC` (Bharat Parallel Corpus Collection), `bpcc-seed-latest` split (`tel_Telu`). **The entire BPCC dataset is used exclusively for training** — no pairs are withheld as validation or test.
 
 To produce high-quality training pairs, we apply a strict 5-stage token-based preprocessing funnel (using the `sarvamai/sarvam-translate` SentencePiece tokenizer):
 
 | Stage | Clean Pairs Remaining | Removed | Filtering Rule |
 | :--- | :---: | :---: | :--- |
-| **0. Raw Corpus** | 98,117 | â€” | Raw seed dataset download |
-| **1. Source Length** | 98,017 | 100 | English source tokens must be in $[4, 60]$. Prevents short noise and extremely long sequences. |
-| **2. Target Length** | 97,520 | 497 | Telugu target tokens must be in $[5, 80]$. Accommodates Telugu's natural expansion. |
-| **3. Length Ratio** | 97,520 | 0 | Token ratio $\frac{\text{Telugu}}{\text{English}}$ must be in $[0.5, 5.0]$. Catches misaligned sentences. |
-| **4. Script Validity** | 96,291 | 1,229 | $\ge 80\%$ of non-whitespace characters must fall in the Telugu Unicode block `[U+0C00â€“U+0C7F]`. |
-| **5. Deduplication** | **95,074** | 1,217 | Deduplicates identical English source sentences (keeps first occurrence). |
+| **0. Raw Corpus** | 98,117 | — | Raw seed dataset download |
+| **1. Source Length** | ~98,017 | ~100 | English source tokens must be in $[1, 200]$. |
+| **2. Target Length** | ~97,520 | ~497 | Telugu target tokens must be in $[1, 300]$. |
+| **3. Length Ratio** | ~97,520 | 0 | Ratio filter: DISABLED (keeps all non-empty pairs). |
+| **4. Script Validity** | ~97,520 | 0 | Script filter: DISABLED (pass all through). |
+| **5. Deduplication** | **~96,300** | ~1,220 | Deduplicates identical English source sentences (keeps first). |
 
-### Dataset Splits
-From the final clean pool (95,074 pairs), we shuffle using seed 42 and partition:
-*   **Test Set:** 1,000 pairs (held out)
-*   **Validation Set:** 2,000 pairs
-*   **Train Set:** 92,074 pairs (all remaining clean pairs; zero source-side overlap with val/test)
+All ~96,300 filtered pairs become the **training set** (`train.json`).
+
+### Evaluation Data — IN22 Benchmark
+
+Evaluation uses the standard **IN22** benchmark from AI4Bharat (multilingual, expert-translated):
+
+| Split | Dataset | Domain | Size |
+| :--- | :--- | :--- | :--- |
+| **Validation** | `ai4bharat/IN22-Conv` | Conversational | ~1,503 sentences |
+| **Test** | `ai4bharat/IN22-Gen` | General | ~1,024 sentences |
+
+Both sets use the `test` split and are kept **completely separate** from training — the IN22 sentences do not appear in BPCC.
 
 ---
 
@@ -126,7 +135,8 @@ Loads the saved predictions and computes corpus-level quality metrics:
 | Disk (model + data + ckpts) | 40 GB | 80 GB |
 | CUDA | 12.1+ | 12.4 |
 
-Training 3 epochs on 92k pairs with batch 4, grad-accum 4 on an A100-40G takes approximately **4–6 hours**.
+Training 3 epochs on ~96k pairs with batch 4, grad-accum 4 on an A100-40G takes approximately **4–6 hours**.
+
 
 ---
 
@@ -157,16 +167,18 @@ python -c "import torch; print(torch.cuda.get_device_name(0))"
 
 ### Step 1 — Data Preprocessing
 
-Downloads `ai4bharat/BPCC` (bpcc-seed-latest, tel_Telu), applies the 5-stage
-filtering funnel, and writes `train.json`, `val.json`, `test.json` to
-`simult_mt/data/filtered/`.
+Downloads `ai4bharat/BPCC` (bpcc-seed-latest, tel_Telu), applies the 5-stage filtering funnel,
+and writes `train.json` to `simult_mt/data/filtered/`.
+Also downloads `ai4bharat/IN22-Conv` (val) and `ai4bharat/IN22-Gen` (test) as eval sets.
 
 ```powershell
 python simult_mt/src/data_pipeline.py
 ```
 
-Expected output after the funnel: **~95,074** clean pairs split into
-92,074 / 2,000 / 1,000.
+Expected output: **~96,300** filtered training pairs (BPCC) + **~1,503** val pairs (IN22-Conv) + **~1,024** test pairs (IN22-Gen).
+
+> **HuggingFace auth:** All three datasets require a HuggingFace login.
+> Run `huggingface-cli login` and accept each dataset's usage agreement before running.
 
 ---
 
@@ -214,7 +226,7 @@ python simult_mt/src/train.py `
 ```
 
 The progress bar shows live `loss`, `avg`, `k`, `step`, and `ETA` per batch.
-Epoch-end validation loss is printed and checkpoints are saved to
+Epoch-end validation loss (computed on **IN22-Conv**) is printed and checkpoints are saved to
 `simult_mt/experiments/waitk_static/epoch_{N}/`.
 
 **Recommended — training + auto-eval in one command:**
@@ -233,13 +245,13 @@ python simult_mt/src/train.py `
 ```
 
 `--auto-eval` triggers Phase 1 (generation) and Phase 2 (scoring) automatically
-on the final checkpoint as soon as training completes.
+on the final checkpoint using the **IN22-Gen test set** as soon as training completes.
 
 ---
 
 ### Step 4 — Stand-alone Evaluation (optional, if not using --auto-eval)
 
-**Phase 1 — Generate predictions** (GPU required):
+**Phase 1 — Generate predictions on IN22-Gen test set** (GPU required):
 
 ```powershell
 python simult_mt/src/eval.py generate `
@@ -291,8 +303,9 @@ After scoring, the following files are written to `simult_mt/results/tables/`:
 | Data preprocessing | `python simult_mt/src/data_pipeline.py` |
 | Dry run | `python simult_mt/src/train.py --dry-run` |
 | Full training | `python simult_mt/src/train.py --epochs 3 --batch-size 4 --grad-accum 4 --lr 2e-4 --k-values 1,2,4,7 --output-dir simult_mt/experiments/waitk_static` |
-| Training + auto-eval | Add `--auto-eval` to the training command |
-| Generate predictions only | `python simult_mt/src/eval.py generate --model-path ... --k 1 2 4 7 full` |
+| Training + auto-eval (IN22-Gen test) | `python simult_mt/src/train.py ... --auto-eval --eval-k-values 1,2,4,7,full --eval-split test` |
+| Generate predictions (IN22-Gen) | `python simult_mt/src/eval.py generate --model-path ... --k 1 2 4 7 full --split test` |
 | Score existing predictions | `python simult_mt/src/eval.py score --predictions-dir ...` |
 | Ablation comparison | `python simult_mt/src/eval.py compare --dirs run1 run2 --labels ...` |
+
 

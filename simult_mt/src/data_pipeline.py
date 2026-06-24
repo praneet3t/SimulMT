@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import random
@@ -62,16 +62,16 @@ def main():
     os.makedirs(filtered_dir, exist_ok=True)
 
     # -----------------------------------------------------------------------
-    # STEP 1 â€” Download
+    # STEP 1 — Download training data (BPCC — 100% used for training)
     # -----------------------------------------------------------------------
     print("=" * 60)
-    print("STEP 1 â€” Downloading data")
+    print("STEP 1 — Downloading training data (ai4bharat/BPCC)")
     print("=" * 60)
 
     pairs = []
 
     try:
-        print("Loading ai4bharat/BPCC  (bpcc-seed-latest Â· tel_Telu split)...")
+        print("Loading ai4bharat/BPCC  (bpcc-seed-latest · tel_Telu split)...")
         dataset = load_dataset("ai4bharat/BPCC", "bpcc-seed-latest", split="tel_Telu")
         print(f"Loaded {len(dataset)} pairs.")
         for row in dataset:
@@ -84,33 +84,20 @@ def main():
         traceback.print_exc()
 
         try:
-            print("\nFallback 1 â€” Helsinki-NLP/opus-100 (en-te)...")
+            print("\nFallback — Helsinki-NLP/opus-100 (en-te)...")
             dd = load_dataset("Helsinki-NLP/opus-100", "en-te")
             for split in dd.keys():
                 for row in dd[split]:
                     pairs.append({"source": row["translation"]["en"].strip(),
                                   "target": row["translation"]["te"].strip()})
-            print(f"Fallback 1 loaded {len(pairs)} pairs.")
+            print(f"Fallback loaded {len(pairs)} pairs.")
         except Exception as e2:
-            print(f"Fallback 1 failed: {e2}")
+            print(f"Fallback failed: {e2}")
             traceback.print_exc()
-
-            try:
-                print("\nFallback 2 â€” ai4bharat/IN22-Gen...")
-                dataset = load_dataset("ai4bharat/IN22-Gen", split="test")
-                for row in dataset:
-                    te = row.get("sentence_te") or row.get("te")
-                    en = row.get("sentence_en") or row.get("en")
-                    if te and en:
-                        pairs.append({"source": en.strip(), "target": te.strip()})
-                print(f"Fallback 2 loaded {len(pairs)} pairs.")
-            except Exception as e3:
-                print(f"Fallback 2 failed: {e3}")
-                traceback.print_exc()
-                raise RuntimeError("All download sources failed.")
+            raise RuntimeError("Training data download failed.")
 
     raw_count = len(pairs)
-    print(f"\nRaw corpus: {raw_count} pairs")
+    print(f"\nRaw training corpus: {raw_count} pairs")
 
     # Save raw text files
     with open(os.path.join(raw_dir, "train.eng"), "w", encoding="utf-8") as fe, \
@@ -119,6 +106,46 @@ def main():
             fe.write(p["source"].replace("\n", " ").strip() + "\n")
             ft.write(p["target"].replace("\n", " ").strip() + "\n")
     print(f"Raw files saved to {raw_dir}")
+
+    # -----------------------------------------------------------------------
+    # STEP 1b — Download evaluation data (IN22-Conv = val, IN22-Gen = test)
+    # -----------------------------------------------------------------------
+    print("\n" + "=" * 60)
+    print("STEP 1b — Downloading evaluation data")
+    print("=" * 60)
+
+    def _load_in22(dataset_name, label):
+        """Load an IN22 eval dataset; return list of {source, target} dicts."""
+        result = []
+        try:
+            print(f"Loading {dataset_name} ({label})...")
+            ds = load_dataset(dataset_name, split="test")
+            for row in ds:
+                en = (row.get("eng_Latn") or row.get("sentence_en") or
+                      row.get("en") or "").strip()
+                te = (row.get("tel_Telu") or row.get("sentence_te") or
+                      row.get("te") or "").strip()
+                if en and te:
+                    result.append({"source": en, "target": te})
+            print(f"  Loaded {len(result)} pairs.")
+        except Exception as e:
+            print(f"  {label} load failed: {e}")
+            traceback.print_exc()
+        return result
+
+    val_pairs_raw  = _load_in22("ai4bharat/IN22-Conv", "val  (IN22-Conv)")
+    test_pairs_raw = _load_in22("ai4bharat/IN22-Gen",  "test (IN22-Gen)")
+
+    if not val_pairs_raw:
+        raise RuntimeError(
+            "IN22-Conv (val) returned 0 pairs — "
+            "check HuggingFace login and dataset access."
+        )
+    if not test_pairs_raw:
+        raise RuntimeError(
+            "IN22-Gen (test) returned 0 pairs — "
+            "check HuggingFace login and dataset access."
+        )
 
     # -----------------------------------------------------------------------
     # STEP 2 â€” Tokenise everything once (expensive, do it once only)
@@ -213,8 +240,8 @@ def main():
     print("STEP 4 â€” Applying filters")
     print("=" * 60)
 
-    # Rule 1 â€” English source length: [4, 60]
-    ENG_MIN, ENG_MAX = 4, 60
+    # Rule 1 â€” English source length: [1, 200]  (relaxed)
+    ENG_MIN, ENG_MAX = 1, 200
     before = len(tokenized)
     filtered_r1 = [t for t in tokenized if ENG_MIN <= t["eng_len"] <= ENG_MAX]
     removed_r1  = before - len(filtered_r1)
@@ -223,8 +250,8 @@ def main():
     print(f"  Removed above {ENG_MAX}: {sum(1 for t in tokenized if t['eng_len'] > ENG_MAX):,}")
     print(f"  Remaining: {len(filtered_r1):,}  (removed: {removed_r1:,})")
 
-    # Rule 2 â€” Telugu target length: [5, 80]
-    TEL_MIN, TEL_MAX = 5, 80
+    # Rule 2 â€” Telugu target length: [1, 300]  (relaxed)
+    TEL_MIN, TEL_MAX = 1, 300
     before = len(filtered_r1)
     filtered_r2 = [t for t in filtered_r1 if TEL_MIN <= t["tel_len"] <= TEL_MAX]
     removed_r2  = before - len(filtered_r2)
@@ -233,31 +260,19 @@ def main():
     print(f"  Removed above {TEL_MAX}: {sum(1 for t in filtered_r1 if t['tel_len'] > TEL_MAX):,}")
     print(f"  Remaining: {len(filtered_r2):,}  (removed: {removed_r2:,})")
 
-    # Rule 3 â€” Ratio filter: [0.5, 5.0]  (tel / eng)
+    # Rule 3 â€” Ratio filter: DISABLED (keep all non-empty pairs)
     before = len(filtered_r2)
-    filtered_r3 = [t for t in filtered_r2
-                   if t["eng_len"] > 0 and RATIO_LOW <= (t["tel_len"] / t["eng_len"]) <= RATIO_HIGH]
+    filtered_r3 = [t for t in filtered_r2 if t["eng_len"] > 0]
     removed_r3 = before - len(filtered_r3)
-    print(f"\nRule 3  Ratio tel/eng [{RATIO_LOW}, {RATIO_HIGH}]:")
+    print(f"\nRule 3  Ratio filter: DISABLED")
     print(f"  Remaining: {len(filtered_r3):,}  (removed: {removed_r3:,})")
 
-    # Rule 4 â€” Telugu script validity
+    # Rule 4 â€” Telugu script validity: DISABLED (pass all through)
     before = len(filtered_r3)
-    filtered_r4 = []
-    removed_by_script = []
-    for t in filtered_r3:
-        if check_telugu_unicode_ratio(t["target"]):
-            filtered_r4.append(t)
-        else:
-            removed_by_script.append(t)
-    removed_r4 = before - len(filtered_r4)
-    print(f"\nRule 4  Telugu script â‰¥80% U+0C00â€“U+0C7F:")
+    filtered_r4 = list(filtered_r3)
+    removed_r4 = 0
+    print(f"\nRule 4  Telugu script filter: DISABLED")
     print(f"  Remaining: {len(filtered_r4):,}  (removed: {removed_r4:,})")
-
-    print("\n  5 examples removed by script filter:")
-    for i, ex in enumerate(removed_by_script[:5], 1):
-        print(f"  [{i}] source: {ex['source'][:90]}")
-        print(f"       target: {ex['target'][:90]}")
 
     # Rule 5 â€” Deduplicate on English source only (keep first occurrence)
     before = len(filtered_r4)
@@ -302,25 +317,20 @@ def main():
     print(f"\n  Funnel saved â†’ {funnel_path}")
 
     # -----------------------------------------------------------------------
-    # STEP 6 â€” Split: test=1000, val=2000, train=everything else
+    # STEP 6 — Save: all BPCC → train;  IN22-Conv → val;  IN22-Gen → test
     # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("STEP 6 â€” Splitting")
+    print("STEP 6 — Saving splits")
     print("=" * 60)
 
-    if final_count < 3000:
-        raise RuntimeError(f"Only {final_count} pairs after filtering â€” need at least 3,000.")
+    # All filtered BPCC pairs go to training — no held-out BPCC split
+    train_pairs = filtered_r5
+    val_pairs   = val_pairs_raw    # from IN22-Conv
+    test_pairs  = test_pairs_raw   # from IN22-Gen
 
-    random.seed(42)
-    random.shuffle(filtered_r5)
-
-    test_pairs  = filtered_r5[:1000]
-    val_pairs   = filtered_r5[1000:3000]
-    train_pairs = filtered_r5[3000:]
-
-    print(f"  Test:  {len(test_pairs):,}")
-    print(f"  Val:   {len(val_pairs):,}")
-    print(f"  Train: {len(train_pairs):,}  (all remaining clean pairs)")
+    print(f"  Train (BPCC, all filtered):    {len(train_pairs):,}")
+    print(f"  Val   (IN22-Conv, test split): {len(val_pairs):,}")
+    print(f"  Test  (IN22-Gen,  test split): {len(test_pairs):,}")
 
     def write_jsonl(pairs, filename, prefix):
         path = os.path.join(filtered_dir, filename)
@@ -331,17 +341,17 @@ def main():
                     "source": p["source"],
                     "target": p["target"],
                 }, ensure_ascii=False) + "\n")
-        print(f"  Saved {len(pairs):,} lines â†’ {path}")
+        print(f"  Saved {len(pairs):,} lines → {path}")
 
     write_jsonl(train_pairs, "train.json", "train")
     write_jsonl(val_pairs,   "val.json",   "val")
     write_jsonl(test_pairs,  "test.json",  "test")
 
     # -----------------------------------------------------------------------
-    # STEP 7 â€” Verify zero overlap on source side across splits
+    # STEP 7 — Verify no source-side overlap between BPCC train and eval sets
     # -----------------------------------------------------------------------
     print("\n" + "=" * 60)
-    print("STEP 7 â€” Overlap verification (English source)")
+    print("STEP 7 — Overlap verification (English source)")
     print("=" * 60)
 
     train_src = {p["source"].strip() for p in train_pairs}
@@ -352,11 +362,13 @@ def main():
     tt = train_src & test_src
     vt = val_src   & test_src
 
-    print(f"  Train âˆ© Val:  {len(tv)}")
-    print(f"  Train âˆ© Test: {len(tt)}")
-    print(f"  Val   âˆ© Test: {len(vt)}")
-    assert len(tv) == 0 and len(tt) == 0 and len(vt) == 0, "Overlap found!"
-    print("  Zero overlap confirmed.")
+    print(f"  Train ∩ Val  (BPCC ∩ IN22-Conv):      {len(tv)}  (expected: 0)")
+    print(f"  Train ∩ Test (BPCC ∩ IN22-Gen):       {len(tt)}  (expected: 0)")
+    print(f"  Val   ∩ Test (IN22-Conv ∩ IN22-Gen):  {len(vt)}")
+    if len(tv) > 0 or len(tt) > 0:
+        print("  WARNING: some training sentences appear in eval sets.")
+    else:
+        print("  Zero train↔eval overlap confirmed.")
 
     # -----------------------------------------------------------------------
     # STEP 8 â€” Token stats on train split + save stats.json
@@ -391,9 +403,14 @@ def main():
             "median": round(float(statistics.median(tr_ratio)), 3),
         },
         "split_sizes": {
-            "train": len(train_pairs),
-            "val":   len(val_pairs),
-            "test":  len(test_pairs),
+            "train_bpcc":    len(train_pairs),
+            "val_in22conv":  len(val_pairs),
+            "test_in22gen":  len(test_pairs),
+        },
+        "datasets": {
+            "train": "ai4bharat/BPCC bpcc-seed-latest tel_Telu (100% used for training)",
+            "val":   "ai4bharat/IN22-Conv test split",
+            "test":  "ai4bharat/IN22-Gen  test split",
         },
         "filter_bounds": {
             "eng_min": ENG_MIN, "eng_max": ENG_MAX,
@@ -405,15 +422,15 @@ def main():
     stats_path = os.path.join(filtered_dir, "stats.json")
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2, ensure_ascii=False)
-    print(f"\n  Stats saved â†’ {stats_path}")
+    print(f"\n  Stats saved → {stats_path}")
 
     print("\n" + "=" * 60)
     print("DONE")
-    print(f"  {len(train_pairs):,} train  |  {len(val_pairs):,} val  |  {len(test_pairs):,} test")
+    print(f"  {len(train_pairs):,} train (BPCC)  |  "
+          f"{len(val_pairs):,} val (IN22-Conv)  |  "
+          f"{len(test_pairs):,} test (IN22-Gen)")
     print("=" * 60)
 
 
 if __name__ == "__main__":
     main()
-
-

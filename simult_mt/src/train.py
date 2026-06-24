@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-train.py â€” Wait-k SiMT fine-tuning for sarvamai/sarvam-translate (English â†’ Telugu)
+train.py — Wait-k SiMT fine-tuning for sarvamai/sarvam-translate (English → Telugu)
 
 QUICK REFERENCE
 ---------------
@@ -8,7 +8,7 @@ QUICK REFERENCE
   Dry run (verifies the full pipeline end-to-end, 2 steps only):
     python simult_mt/src/train.py --dry-run
 
-  Full training (3 epochs, multi-anchor k âˆˆ {1,2,4,7}):
+  Full training (3 epochs, multi-anchor k ∈ {1,2,4,7}):
     python simult_mt/src/train.py \\
         --epochs 3 \\
         --batch-size 4 \\
@@ -17,13 +17,31 @@ QUICK REFERENCE
         --k-values 1,2,4,7 \\
         --output-dir simult_mt/experiments/waitk_static
 
+  Recommended — training + auto-eval in one command:
+    python simult_mt/src/train.py \\
+        --epochs 3 \\
+        --batch-size 4 \\
+        --grad-accum 4 \\
+        --lr 2e-4 \\
+        --k-values 1,2,4,7 \\
+        --output-dir simult_mt/experiments/waitk_static \\
+        --auto-eval \\
+        --eval-k-values 1,2,4,7,full \\
+        --eval-split test
+
+DATASETS
+--------
+  Training : ai4bharat/BPCC  (bpcc-seed-latest · tel_Telu) — 100 % used for training
+  Val      : ai4bharat/IN22-Conv  (test split, conversation domain)
+  Test     : ai4bharat/IN22-Gen   (test split, general domain)
+
 ENVIRONMENT SETUP (run once before training)
 --------------------------------------------
   python -m venv simt_env
   simt_env\\Scripts\\activate          # Windows
   # source simt_env/bin/activate      # Linux / macOS
 
-  # CUDA 12.1 build of PyTorch â€” adjust cu121 to match your driver
+  # CUDA 12.1 build of PyTorch — adjust cu121 to match your driver
   pip install torch --index-url https://download.pytorch.org/whl/cu121
 
   pip install "transformers>=4.40.0" peft bitsandbytes datasets \\
@@ -525,7 +543,10 @@ def main():
                 " --k-values 1,2,4,7"
                 " --output-dir simult_mt/experiments/waitk_static"
                 " --auto-eval"
+                " --eval-k-values 1,2,4,7,full"
+                " --eval-split test"
             )
+            print("\n  (Eval: val=IN22-Conv, test=IN22-Gen)")
         else:
             print("\nDRY RUN INCOMPLETE -- fewer than 2 steps executed.")
             sys.exit(1)
