@@ -24,5 +24,3 @@ simult_mt/experiments/
 *.pth
 *.safetensors
 
-# Evaluation/predictions output
-simult_mt/results/predictions/

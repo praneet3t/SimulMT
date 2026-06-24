@@ -602,9 +602,9 @@ def _save_markdown_table(results: dict, manifest: dict, output_dir: str):
 ## Latency Metric Definitions
 
 For wait-k policy with source length S and hypothesis length T:
-- **g(t)** = min(k + t Ã¢Ë†â€™ 1, S)  Ã¢â€ Â source tokens read when writing target token t
+- **g(t)** = min(k + t Ã¢Ë†â€™ 1, S)  Ã¢â€ Â  source tokens read when writing target token t
 - **AP** = (1/T) ÃŽÂ£ g(t)/S
-- **AL** = (1/Ãâ€ž(S)) ÃŽÂ£_{t=1}^{Ãâ€ž(S)} [g(t) Ã¢Ë†â€™ (tÃ¢Ë†â€™1)Ã‚Â·S/T]  where Ãâ€ž(S) = first t where g(t) = S
+- **AL** = (1/Ã â€ž(S)) ÃŽÂ£_{{t=1}}^{{Ã â€ž(S)}} [g(t) Ã¢Ë†â€™ (tÃ¢Ë†â€™1)Ã‚Â·S/T]  where Ã â€ž(S) = first t where g(t) = S
 - **DAL** = (1/T) ÃŽÂ£ max(g(t) Ã¢Ë†â€™ (tÃ¢Ë†â€™1)Ã‚Â·S/T, 0)
 """
     md_path = os.path.join(output_dir, "results_table.md")
