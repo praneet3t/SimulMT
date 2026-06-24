@@ -16,3 +16,13 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Experiments and model weights
+simult_mt/experiments/
+*.pt
+*.bin
+*.pth
+*.safetensors
+
+# Evaluation/predictions output
+simult_mt/results/predictions/
