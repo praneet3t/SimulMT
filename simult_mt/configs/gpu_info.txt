@@ -1,0 +1,3 @@
+CUDA Available: False
+GPU Name: N/A (CPU only or non-CUDA GPU)
+Total VRAM: N/A

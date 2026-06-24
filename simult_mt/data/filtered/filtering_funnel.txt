@@ -1,0 +1,9 @@
+FILTERING FUNNEL — English → Telugu
+=======================================================
+Raw corpus:                 98,117
+After English len filter:   98,017  (removed: 100,  bounds: [4, 60])
+After Telugu len filter:    97,520  (removed: 497,  bounds: [5, 80])
+After ratio filter:         97,520  (removed: 0,  bounds: [0.5, 5.0])
+After script filter:        96,291  (removed: 1,229)
+After deduplication:        95,074  (removed: 1,217)
+Final clean pairs:          95,074

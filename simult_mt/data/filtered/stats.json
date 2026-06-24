@@ -1,0 +1,31 @@
+{
+  "english": {
+    "min": 5,
+    "max": 60,
+    "mean": 20.474,
+    "median": 19.0
+  },
+  "telugu": {
+    "min": 8,
+    "max": 80,
+    "mean": 35.294,
+    "median": 33.0
+  },
+  "expansion_ratio_tel_over_eng": {
+    "mean": 1.761,
+    "median": 1.724
+  },
+  "split_sizes": {
+    "train": 92074,
+    "val": 2000,
+    "test": 1000
+  },
+  "filter_bounds": {
+    "eng_min": 4,
+    "eng_max": 60,
+    "tel_min": 5,
+    "tel_max": 80,
+    "ratio_min": 0.5,
+    "ratio_max": 5.0
+  }
+}
