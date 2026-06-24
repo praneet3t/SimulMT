@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import json
 import torch
@@ -16,7 +16,7 @@ class SiMTDataset(Dataset):
     knows where English source and Telugu target begin and end.
     """
 
-    def __init__(self, json_path, tokenizer, max_source_len=60, max_target_len=80):
+    def __init__(self, json_path, tokenizer, max_source_len=60, max_target_len=80, tgt_lang="Telugu"):
         self.samples = []
         with open(json_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -26,6 +26,7 @@ class SiMTDataset(Dataset):
         self.tokenizer      = tokenizer
         self.max_source_len = max_source_len   # English source cap
         self.max_target_len = max_target_len   # Telugu target cap
+        self.tgt_lang       = tgt_lang         # Target language for prompt
 
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -52,14 +53,14 @@ class SiMTDataset(Dataset):
         # ------------------------------------------------------------------
 
         system_only_msgs = [
-            {"role": "system", "content": "Translate the text below to Telugu."}
+            {"role": "system", "content": f"Translate the text below to {self.tgt_lang}."}
         ]
         prompt_only_str = self.tokenizer.apply_chat_template(
             system_only_msgs, tokenize=False, add_generation_prompt=False
         )
 
         with_source_msgs = [
-            {"role": "system", "content": "Translate the text below to Telugu."},
+            {"role": "system", "content": f"Translate the text below to {self.tgt_lang}."},
             {"role": "user",   "content": source_text},
         ]
         prompt_source_str = self.tokenizer.apply_chat_template(
@@ -150,9 +151,11 @@ def get_dataloaders(train_path, val_path, tokenizer, batch_size=4):
     cuda = torch.cuda.is_available()
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              collate_fn=collate_fn, num_workers=2, pin_memory=cuda)
+                              collate_fn=collate_fn, num_workers=8, pin_memory=cuda,
+                              persistent_workers=cuda)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
-                              collate_fn=collate_fn, num_workers=2, pin_memory=cuda)
+                              collate_fn=collate_fn, num_workers=4, pin_memory=cuda,
+                              persistent_workers=cuda)
     return train_loader, val_loader
 
 

@@ -132,7 +132,7 @@ def load_model_and_tokenizer(use_4bit: bool):
         bnb_cfg = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
@@ -375,9 +375,11 @@ def main():
         print(f"  Train: {len(train_ds):,}  Val: {len(val_ds):,}  batch_size={batch_sz}")
 
     train_loader = DataLoader(train_ds, batch_size=batch_sz, shuffle=True,
-                              collate_fn=collate_fn, num_workers=0)
+                              collate_fn=collate_fn, num_workers=8,
+                              pin_memory=cuda_ok, persistent_workers=cuda_ok)
     val_loader   = DataLoader(val_ds,   batch_size=batch_sz, shuffle=False,
-                              collate_fn=collate_fn, num_workers=0)
+                              collate_fn=collate_fn, num_workers=4,
+                              pin_memory=cuda_ok, persistent_workers=cuda_ok)
 
     # -----------------------------------------------------------------------
     # Optimizer

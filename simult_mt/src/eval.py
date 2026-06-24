@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 eval.py Ã¢â‚¬â€ Complete evaluation for English Ã¢â€ â€™ Telugu SiMT
 ========================================================
@@ -254,20 +254,20 @@ def _get_base_model_name(peft_checkpoint: str) -> str:
     return cfg.get("base_model_name_or_path", "sarvamai/sarvam-translate")
 
 
-def format_prompt(tokenizer, source_text: str) -> str:
+def format_prompt(tokenizer, source_text: str, tgt_lang: str = "Telugu") -> str:
     """Format English source into Gemma 3's chat template."""
     msgs = [
-        {"role": "system", "content": "Translate the text below to Telugu."},
+        {"role": "system", "content": f"Translate the text below to {tgt_lang}."},
         {"role": "user",   "content": source_text},
     ]
     return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
 
-def compute_source_offsets(tokenizer, source_text: str) -> tuple[int, int, int]:
+def compute_source_offsets(tokenizer, source_text: str, tgt_lang: str = "Telugu") -> tuple[int, int, int]:
     """Return (source_start, source_end, target_start) for the wait-k mask."""
-    sys_only = [{"role": "system", "content": "Translate the text below to Telugu."}]
+    sys_only = [{"role": "system", "content": f"Translate the text below to {tgt_lang}."}]
     with_src  = [
-        {"role": "system", "content": "Translate the text below to Telugu."},
+        {"role": "system", "content": f"Translate the text below to {tgt_lang}."},
         {"role": "user",   "content": source_text},
     ]
 
