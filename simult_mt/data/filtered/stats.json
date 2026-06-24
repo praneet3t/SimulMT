@@ -1,30 +1,35 @@
 {
   "english": {
     "min": 5,
-    "max": 60,
-    "mean": 20.474,
+    "max": 135,
+    "mean": 20.724,
     "median": 19.0
   },
   "telugu": {
     "min": 8,
-    "max": 80,
-    "mean": 35.294,
+    "max": 221,
+    "mean": 35.622,
     "median": 33.0
   },
   "expansion_ratio_tel_over_eng": {
-    "mean": 1.761,
-    "median": 1.724
+    "mean": 1.756,
+    "median": 1.72
   },
   "split_sizes": {
-    "train": 92074,
-    "val": 2000,
-    "test": 1000
+    "train_bpcc": 96887,
+    "val_in22conv": 1503,
+    "test_in22gen": 1024
+  },
+  "datasets": {
+    "train": "ai4bharat/BPCC bpcc-seed-latest tel_Telu (100% used for training)",
+    "val": "ai4bharat/IN22-Conv test split",
+    "test": "ai4bharat/IN22-Gen  test split"
   },
   "filter_bounds": {
-    "eng_min": 4,
-    "eng_max": 60,
-    "tel_min": 5,
-    "tel_max": 80,
+    "eng_min": 1,
+    "eng_max": 200,
+    "tel_min": 1,
+    "tel_max": 300,
     "ratio_min": 0.5,
     "ratio_max": 5.0
   }

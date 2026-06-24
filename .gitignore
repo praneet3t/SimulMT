@@ -1,0 +1,18 @@
+# Virtual environment
+simt_env/
+
+# Logs
+screenlog.0
+*.log
+
+# Python cache and temporary files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ipynb_checkpoints/
+
+# OS/IDE files
+.DS_Store
+.vscode/
+.idea/

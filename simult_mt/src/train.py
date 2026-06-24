@@ -146,6 +146,7 @@ def load_model_and_tokenizer(use_4bit: bool):
         model = AutoModelForCausalLM.from_pretrained(
             "sarvamai/sarvam-translate",
             torch_dtype=torch.float32,
+            device_map="auto",
             low_cpu_mem_usage=True,
         )
         model.gradient_checkpointing_enable()
@@ -158,6 +159,7 @@ def load_model_and_tokenizer(use_4bit: bool):
         lora_dropout=0.05,
         bias="none",
         task_type=TaskType.CAUSAL_LM,
+        init_lora_weights ="eva"
     )
     model = get_peft_model(model, lora_cfg)
     model.print_trainable_parameters()
