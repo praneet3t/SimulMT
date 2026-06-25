@@ -1,0 +1,14 @@
+{
+  "run_name": "20260625_064543",
+  "model_path": "praneet3/sarvam-translate-waitk-simulmt",
+  "split": "test",
+  "n_samples": 100,
+  "k_values": [
+    "1",
+    "2",
+    "4",
+    "7",
+    "full"
+  ],
+  "timestamp": "2026-06-25T06:45:43.434908+00:00"
+}

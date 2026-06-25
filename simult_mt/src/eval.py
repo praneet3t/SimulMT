@@ -86,8 +86,8 @@ def build_parser():
                      help="Generation batch size (keep at 1 for correct wait-k masking)")
     gen.add_argument("--max-new-tokens",type=int, default=200,
                      help="Maximum new tokens to generate per sentence")
-    gen.add_argument("--max-samples",   type=int, default=None,
-                     help="Cap number of test samples (default: use all)")
+    gen.add_argument("--max-samples",   type=int, default=100,
+                     help="Cap number of test samples (default: 100, use <= 0 for all)")
     gen.add_argument("--run-name",      default=None,
                      help="Tag for this run (default: auto timestamp)")
     gen.add_argument("--no-comet-gen",  action="store_true",
@@ -240,11 +240,11 @@ def load_model_for_eval(model_path: str):
 
     model_path can be:
       - A local directory containing a full model checkpoint (merged weights or LoRA adapter)
-      - A HuggingFace Hub model ID (e.g. 'praneet3t/sarvam-waitk-telugu')
+      - A HuggingFace Hub model ID (e.g. 'praneet3/sarvam-translate-waitk-simulmt')
 
-    IMPORTANT: We force attn_implementation='eager' to ensure the wait-k
-    attention mask is applied correctly. SDPA and Flash Attention backends
-    bypass hook-based masking and process 4D masks differently.
+    Wait-k constraints are enforced via WaitKMaskController forward pre-hooks
+    (the same mechanism used during training), so no special attention backend
+    is required.
     """
     from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     import torch
@@ -269,11 +269,6 @@ def load_model_for_eval(model_path: str):
     # Determine base model source
     base_model_id = model_path if not is_peft else _get_base_model_name(model_path)
 
-    # CRITICAL: use eager attention so the 4D wait-k mask is applied correctly.
-    # SDPA / Flash Attention process masks differently and may ignore the explicit
-    # 4D causal+wait-k mask we pass to model.generate().
-    attn_impl = "eager"
-
     if cuda_ok:
         bnb_cfg = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -284,14 +279,12 @@ def load_model_for_eval(model_path: str):
             base_model_id,
             quantization_config=bnb_cfg,
             device_map="auto",
-            attn_implementation=attn_impl,
         )
     else:
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
-            attn_implementation=attn_impl,
         )
 
     if is_peft:
@@ -345,118 +338,70 @@ def compute_source_offsets(tokenizer, source_text: str, tgt_lang: str = "Telugu"
     return enc(prompt_only_str), enc(prompt_src_str), enc(prompt_full_str)
 
 
-def _build_waitk_4d_mask(
-    source_start: int,
-    source_end:   int,
-    target_start: int,
-    prompt_len:   int,
-    max_new_tokens: int,
-    k,
-    dtype,
-    device,
-):
-    """
-    Build a full causal + wait-k 4D attention mask for use with model.generate().
-
-    Shape: [1, 1, total_len, total_len] where total_len = prompt_len + max_new_tokens.
-
-    The mask encodes:
-      1. Standard causal masking (lower-triangular)
-      2. Wait-k constraint: target token t (0-indexed from target_start) can only
-         attend to source tokens [source_start .. source_start + min(k+t, src_len) - 1]
-
-    This mask is passed directly to model.generate() as the attention_mask argument,
-    bypassing any internal 2D-to-4D conversion that would strip our wait-k constraint.
-    """
-    import torch
-
-    total = prompt_len + max_new_tokens
-    src_len = source_end - source_start
-
-    # Build standard causal mask: lower-triangular = 0 (attend), upper = NEG_INF (block)
-    NEG_INF = torch.finfo(dtype).min / 2
-    # Create indices for vectorized causal mask
-    rows = torch.arange(total, device=device).unsqueeze(1)   # [total, 1]
-    cols = torch.arange(total, device=device).unsqueeze(0)   # [1, total]
-    causal = torch.where(cols <= rows,
-                         torch.zeros(1, dtype=dtype, device=device),
-                         torch.full((1,), NEG_INF, dtype=dtype, device=device))
-    mask = causal  # [total, total]
-
-    if k != "full" and src_len > 0:
-        k_int = int(k)
-        # t_indices: 0-indexed target steps for rows [target_start .. target_start+max_new_tokens-1]
-        t_range = torch.arange(max_new_tokens, device=device)          # [max_new_tokens]
-        row_range = (target_start + t_range)                            # [max_new_tokens]
-        # visible source tokens for each target step: min(k + t, src_len)
-        visible = torch.clamp(k_int + t_range, max=src_len)            # [max_new_tokens]
-        # source column indices relative to source_start
-        src_cols = torch.arange(src_len, device=device)                # [src_len]
-        # should_block[t, s] = src_col s >= visible[t]  =>  block that source position
-        should_block = src_cols.unsqueeze(0) >= visible.unsqueeze(1)   # [max_new_tokens, src_len]
-        # Apply to the mask for valid rows only
-        valid = row_range < total
-        for i, (row, blk) in enumerate(zip(row_range.tolist(), should_block)):
-            if not valid[i]:
-                break
-            mask[int(row), source_start:source_end][blk] = NEG_INF
-
-    return mask.unsqueeze(0).unsqueeze(0)  # [1, 1, total, total]
-
-
 def generate_one(model, tokenizer, source_text: str, k,
                  max_new_tokens: int = 200, device: str = "cuda") -> str:
     """
     Generate a Telugu translation enforcing the wait-k policy.
 
-    Key design decisions:
-    - Uses model.generate() (NOT a manual token loop) for correctness and speed.
-    - Passes a pre-built 4D causal+wait-k attention mask directly, bypassing
-      HuggingFace's internal 2D-to-4D conversion which would drop the constraint.
-    - Uses use_cache=False so the full mask is applied at every step consistently.
-    - Requires attn_implementation='eager' in the loaded model (set in load_model_for_eval)
-      because SDPA/Flash Attention ignore explicit 4D masks.
+    Uses the same WaitKMaskController hook-based approach as training:
+    - Registers forward pre-hooks on all attention layers to inject wait-k bias.
+    - Uses standard model.generate() with a plain 2D causal mask.
+    - k='full' means no wait-k constraint (standard offline generation).
     """
     import torch
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from masking import WaitKMaskController
 
     prompt_str = format_prompt(tokenizer, source_text)
-    source_start, source_end, target_start = compute_source_offsets(tokenizer, source_text)
-
-    prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False, return_tensors="pt")
-    prompt_ids = prompt_ids.to(device)
+    prompt_ids = tokenizer(
+        prompt_str,
+        return_tensors="pt",
+        add_special_tokens=False,
+    ).input_ids.to(device)
     prompt_len = prompt_ids.shape[1]
-    dtype      = next(model.parameters()).dtype
-
-    # Build the full 4D mask upfront covering [prompt + max_new_tokens] positions
-    mask_4d = _build_waitk_4d_mask(
-        source_start=source_start,
-        source_end=source_end,
-        target_start=target_start,
-        prompt_len=prompt_len,
-        max_new_tokens=max_new_tokens,
-        k=k,
-        dtype=dtype,
-        device=device,
-    )  # [1, 1, total, total]
 
     eos_id = tokenizer.eos_token_id
-    pad_id = tokenizer.pad_token_id or eos_id
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
 
-    with torch.no_grad():
-        output_ids = model.generate(
-            input_ids=prompt_ids,
-            attention_mask=mask_4d,          # 4D mask — bypasses internal conversion
-            max_new_tokens=max_new_tokens,
-            do_sample=False,                 # greedy
-            eos_token_id=eos_id,
-            pad_token_id=pad_id,
-            use_cache=False,                 # must be False when supplying a 4D mask
+    # Set up wait-k mask controller (same as training)
+    ctrl = WaitKMaskController(model)
+
+    if k != "full":
+        # Compute where the source tokens are in the prompt
+        source_start, source_end, target_start = compute_source_offsets(tokenizer, source_text)
+        # total_len covers prompt + max new tokens
+        total_len = prompt_len + max_new_tokens
+        ctrl.set_context(
+            source_start=source_start,
+            source_end=source_end,
+            target_start=target_start,
+            seq_len=total_len,
+            k=int(k),
         )
+        ctrl.register_hooks()  # hooks will fire on every forward pass inside generate
+
+    try:
+        # Standard 2D attention mask — all ones (attend to all prompt tokens)
+        attn_mask = torch.ones((1, prompt_len), dtype=torch.long, device=device)
+
+        with torch.no_grad():
+            output_ids = model.generate(
+                input_ids=prompt_ids,
+                attention_mask=attn_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,           # greedy
+                eos_token_id=eos_id,
+                pad_token_id=pad_id,
+            )
+    finally:
+        ctrl.remove_hooks()   # always clean up hooks
 
     # Decode only the newly generated tokens (after the prompt)
     gen_tokens = output_ids[0, prompt_len:].tolist()
-    # Strip EOS if present
-    if gen_tokens and gen_tokens[-1] == eos_id:
+    # Strip trailing EOS/pad
+    while gen_tokens and gen_tokens[-1] in (eos_id, pad_id):
         gen_tokens = gen_tokens[:-1]
     return tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
 
@@ -485,7 +430,7 @@ def cmd_generate(args):
         for line in f:
             if line.strip():
                 samples.append(json.loads(line))
-    if args.max_samples:
+    if args.max_samples and args.max_samples > 0:
         samples = samples[:args.max_samples]
     print(f"Evaluating on {len(samples)} samples from {args.split} split.")
 
@@ -533,7 +478,8 @@ def cmd_generate(args):
                         device=device,
                     )
                 except Exception as e:
-                    print(f"    WARN: sample {i} failed: {e}")
+                    print(f"    ERROR: sample {i} ({sample.get('id','?')}) failed:")
+                    traceback.print_exc()
                     hyp = ""
 
                 src_len = len(tokenizer.encode(sample["source"], add_special_tokens=False))

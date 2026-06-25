@@ -2,6 +2,8 @@
 
 This repository implements a Simultaneous Machine Translation (SiMT) pipeline using a wait-$k$ static policy applied to **Gemma 3 (sarvamai/sarvam-translate)** via parameter-efficient fine-tuning (LoRA) and a custom attention masking controller.
 
+> **🤗 Fine-tuned model on HuggingFace:** [`praneet3/sarvam-translate-waitk-simulmt`](https://huggingface.co/praneet3/sarvam-translate-waitk-simulmt)
+
 ---
 
 ## 1. Problem Formulation & Translation Direction
@@ -249,33 +251,52 @@ on the final checkpoint using the **IN22-Gen test set** as soon as training comp
 
 ---
 
-### Step 4 — Stand-alone Evaluation (optional, if not using --auto-eval)
+### Step 4 — Stand-alone Evaluation (using the HuggingFace model)
 
-**Phase 1 — Generate predictions on IN22-Gen test set** (GPU required):
+The fine-tuned model is published on HuggingFace as [`praneet3/sarvam-translate-waitk-simulmt`](https://huggingface.co/praneet3/sarvam-translate-waitk-simulmt). You can evaluate it directly without a local checkpoint.
 
-```powershell
-python simult_mt/src/eval.py generate `
-    --model-path simult_mt/experiments/waitk_static/epoch_3 `
-    --k 1 2 4 7 full `
-    --split test `
+**Phase 1 — Generate predictions** (GPU required, ~100 samples for a quick check):
+
+```bash
+python simult_mt/src/eval.py generate \
+    --model-path praneet3/sarvam-translate-waitk-simulmt \
+    --k 1 2 4 7 full \
+    --split test \
+    --max-samples 100 \
     --output-dir simult_mt/results/predictions
 ```
 
+**Full evaluation** (all ~1024 test samples):
+
+```bash
+python simult_mt/src/eval.py generate \
+    --model-path praneet3/sarvam-translate-waitk-simulmt \
+    --k 1 2 4 7 full \
+    --split test \
+    --max-samples 0 \
+    --output-dir simult_mt/results/predictions
+```
+
+> **Note:** `--max-samples 0` (or any value `<= 0`) runs on the entire dataset. Default is 100.
+
 **Phase 2 — Score from saved predictions** (CPU only, fast, repeatable):
 
-```powershell
-python simult_mt/src/eval.py score `
-    --predictions-dir simult_mt/results/predictions/<run_name> `
-    --output-dir simult_mt/results/tables
+```bash
+python simult_mt/src/eval.py score \
+    --predictions-dir simult_mt/results/predictions/<RUN_TIMESTAMP> \
+    --output-dir simult_mt/results/tables \
+    --no-comet
 ```
+
+> Remove `--no-comet` to also compute neural COMET scores (requires ~2GB model download).
 
 **Ablation comparison across multiple runs:**
 
-```powershell
-python simult_mt/src/eval.py compare `
-    --dirs simult_mt/results/predictions/run_k1only `
-           simult_mt/results/predictions/run_multianchor `
-    --labels "k=1 only" "Multi-anchor k={1,2,4,7}" `
+```bash
+python simult_mt/src/eval.py compare \
+    --dirs simult_mt/results/predictions/run_k1only \
+           simult_mt/results/predictions/run_multianchor \
+    --labels "k=1 only" "Multi-anchor k={1,2,4,7}" \
     --output-dir simult_mt/results/tables/ablation
 ```
 
@@ -299,13 +320,14 @@ After scoring, the following files are written to `simult_mt/results/tables/`:
 
 | Action | Command |
 |---|---|
-| Environment setup | `pip install ...` (see Step 0) |
+| Environment setup | `pip install sacrebleu unbabel-comet matplotlib transformers peft bitsandbytes datasets sentencepiece numpy pandas tqdm scipy` |
 | Data preprocessing | `python simult_mt/src/data_pipeline.py` |
 | Dry run | `python simult_mt/src/train.py --dry-run` |
 | Full training | `python simult_mt/src/train.py --epochs 3 --batch-size 4 --grad-accum 4 --lr 2e-4 --k-values 1,2,4,7 --output-dir simult_mt/experiments/waitk_static` |
 | Training + auto-eval (IN22-Gen test) | `python simult_mt/src/train.py ... --auto-eval --eval-k-values 1,2,4,7,full --eval-split test` |
-| Generate predictions (IN22-Gen) | `python simult_mt/src/eval.py generate --model-path ... --k 1 2 4 7 full --split test` |
-| Score existing predictions | `python simult_mt/src/eval.py score --predictions-dir ...` |
+| Quick eval — 100 samples (HF model) | `python simult_mt/src/eval.py generate --model-path praneet3/sarvam-translate-waitk-simulmt --k 1 2 4 7 full --split test --max-samples 100` |
+| Full eval — all samples (HF model) | `python simult_mt/src/eval.py generate --model-path praneet3/sarvam-translate-waitk-simulmt --k 1 2 4 7 full --split test --max-samples 0` |
+| Score existing predictions | `python simult_mt/src/eval.py score --predictions-dir simult_mt/results/predictions/<RUN_TIMESTAMP> --no-comet` |
 | Ablation comparison | `python simult_mt/src/eval.py compare --dirs run1 run2 --labels ...` |
 
 
