@@ -27,3 +27,10 @@ simult_mt/experiments/
 *.pth
 *.safetensors
 
+# Evaluation results and plots
+simult_mt/results/
+
+# Live logs
+simult_mt/src/simt_live_log.txt
+
+
