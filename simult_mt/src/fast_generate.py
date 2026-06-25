@@ -5,20 +5,20 @@ fast_generate.py — Faster inference for wait-k SiMT evaluation
 Key speedups over the original eval.py:
   1. bf16 instead of 4-bit quant (much faster compute on A6000)
   2. torch.compile on the model
-  3. Batched generation (multiple samples at once per k-value)
+  3. Batched generation for the 'full' baseline; single-sample loop for wait-k
+     (batching wait-k requires per-sample hooks — see note in generate_batch)
   4. Each script invocation handles a single k-value so you can
-     run k=1,2,4,7,full in parallel in separate screen windows.
+     run k=1,4,7,full in parallel in separate screen windows.
 
-Usage — pick a shared RUN_NAME for all k-windows, e.g. 20260625_fast:
+Usage — pick a shared RUN_NAME for all k-windows, e.g. 20260625_v2:
   source ~/simt_env/bin/activate && cd ~/SimulMT
-  python simult_mt/src/fast_generate.py --k 1    --run-name 20260625_fast
-  python simult_mt/src/fast_generate.py --k 2    --run-name 20260625_fast
-  python simult_mt/src/fast_generate.py --k 4    --run-name 20260625_fast
-  python simult_mt/src/fast_generate.py --k 7    --run-name 20260625_fast
-  python simult_mt/src/fast_generate.py --k full --run-name 20260625_fast
+  python simult_mt/src/fast_generate.py --k 1    --run-name 20260625_v2
+  python simult_mt/src/fast_generate.py --k 4    --run-name 20260625_v2
+  python simult_mt/src/fast_generate.py --k 7    --run-name 20260625_v2
+  python simult_mt/src/fast_generate.py --k full --run-name 20260625_v2
 
 Then score with:
-  python simult_mt/src/eval.py score --predictions-dir simult_mt/results/predictions/20260625_fast --no-comet
+  python simult_mt/src/eval.py score --predictions-dir simult_mt/results/predictions/20260625_v2 --no-comet
 """
 
 import os, sys, json, argparse, traceback
@@ -37,7 +37,9 @@ def build_parser():
     p.add_argument("--output-dir",     default="simult_mt/results/predictions")
     p.add_argument("--run-name",       default=None)
     p.add_argument("--max-samples",    type=int, default=100)
-    p.add_argument("--batch-size",     type=int, default=8)
+    p.add_argument("--batch-size",     type=int, default=8,
+                   help="Batch size for 'full' baseline only. "
+                        "Wait-k runs always use batch_size=1 for correctness.")
     p.add_argument("--max-new-tokens", type=int, default=200)
     p.add_argument("--no-compile",     action="store_true")
     p.add_argument("--dtype",          default="bf16",
@@ -101,28 +103,49 @@ def compute_source_offsets(tokenizer, source_text, tgt_lang="Telugu"):
 
 
 def generate_batch(model, tokenizer, sources, k, max_new_tokens, device):
-    import torch, inspect
-    from masking import WaitKMaskController
+    """
+    Generate translations for a list of source sentences under a wait-k policy.
 
-    B       = len(sources)
-    prompts = [format_prompt(tokenizer, s) for s in sources]
-    enc     = tokenizer(prompts, return_tensors="pt", padding=True, add_special_tokens=False)
-    input_ids      = enc.input_ids.to(device)
-    attention_mask = enc.attention_mask.to(device)
-    pad_len        = input_ids.shape[1]
+    For k='full': sources are batched together for throughput.
+    For wait-k (int): sources are processed one-at-a-time.
+
+    WHY single-sample for wait-k?
+    ==============================
+    WaitKMaskController holds a single (source_start, source_end, target_start)
+    context and broadcasts it across all heads/layers via a forward pre-hook.
+    In a left-padded batch, every sample has different absolute token positions,
+    so one shared context would mask the wrong columns for all but one sample.
+
+    The correct fix is batch_size=1 for wait-k.  The 'full' path below retains
+    batched throughput since it needs no masking at all.
+
+    The previous implementation tried to hook Linear projection layers
+    (q_proj / k_proj / v_proj) which never receive an attention_mask, so the
+    constraint was silently dropped on every call — producing identical output
+    across all k values.  We now use WaitKMaskController.register_hooks() which
+    correctly targets the Attention *class* modules and uses waitk_bias() to
+    handle both the prefill pass (q_len == kv_len) and every KV-cached decode
+    step (q_len == 1, kv_len grows), matching the training-time masking exactly.
+    """
+    import torch
+    from masking import WaitKMaskController
 
     eos_id = tokenizer.eos_token_id
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
 
-    # Compute per-sample offsets adjusted for left-padding
-    offsets = []
-    for i, src in enumerate(sources):
-        ss0, se0, ts0 = compute_source_offsets(tokenizer, src)
-        actual_len    = int(attention_mask[i].sum().item())
-        left_pad      = pad_len - actual_len
-        offsets.append((ss0 + left_pad, se0 + left_pad, ts0 + left_pad))
-
+    # ------------------------------------------------------------------
+    # Full-attention baseline: batch for speed, no masking needed
+    # ------------------------------------------------------------------
     if k == "full":
+        B = len(sources)
+        prompts = [format_prompt(tokenizer, s) for s in sources]
+        enc = tokenizer(
+            prompts, return_tensors="pt", padding=True, add_special_tokens=False
+        )
+        input_ids      = enc.input_ids.to(device)
+        attention_mask = enc.attention_mask.to(device)
+        pad_len        = input_ids.shape[1]
+
         with torch.no_grad():
             out = model.generate(
                 input_ids=input_ids,
@@ -140,69 +163,51 @@ def generate_batch(model, tokenizer, sources, k, max_new_tokens, device):
             results.append(tokenizer.decode(gen, skip_special_tokens=True).strip())
         return results
 
-    # Wait-k: batch-aware hook via WaitKMaskController.build_batch_mask
+    # ------------------------------------------------------------------
+    # Wait-k: one sample at a time with correct WaitKMaskController hooks
+    # ------------------------------------------------------------------
     ctrl = WaitKMaskController(model)
-    source_starts = [o[0] for o in offsets]
-    source_ends   = [o[1] for o in offsets]
-    target_starts = [o[2] for o in offsets]
-
-    def waitk_hook_fn(module, args, kwargs):
-        if "attention_mask" in kwargs:
-            amask = kwargs["attention_mask"]
-        elif len(args) > 1:
-            amask = args[1]
-        else:
-            return
-        if amask is None or amask.ndim != 4:
-            return
-        bsz, _, q_len, kv_len = amask.shape
-        bias = ctrl.build_batch_mask(
-            source_starts[:bsz], source_ends[:bsz], target_starts[:bsz],
-            kv_len, int(k), dtype=amask.dtype, device=amask.device,
-        )  # [B, 1, kv_len, kv_len]
-        bias = bias[:, :, -q_len:, :]  # [B, 1, q_len, kv_len]
-        new_mask = amask + bias
-        if "attention_mask" in kwargs:
-            kwargs["attention_mask"] = new_mask
-        else:
-            lst = list(args); lst[1] = new_mask
-            return tuple(lst), kwargs
-
-    has_kwargs = "with_kwargs" in inspect.signature(
-        torch.nn.Module.register_forward_pre_hook
-    ).parameters
-    handles = []
-    for name, module in model.named_modules():
-        nm = name.lower()
-        if ("attn" in nm or "attention" in nm) and not list(module.children()):
-            if has_kwargs:
-                h = module.register_forward_pre_hook(waitk_hook_fn, with_kwargs=True)
-            else:
-                h = module.register_forward_pre_hook(
-                    lambda m, a: waitk_hook_fn(m, a, {})
-                )
-            handles.append(h)
-
-    try:
-        with torch.no_grad():
-            out = model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                eos_token_id=eos_id,
-                pad_token_id=pad_id,
-            )
-    finally:
-        for h in handles:
-            h.remove()
-
     results = []
-    for i in range(B):
-        gen = out[i, pad_len:].tolist()
+
+    for src in sources:
+        prompt_str = format_prompt(tokenizer, src)
+        enc_one    = tokenizer(
+            prompt_str, return_tensors="pt", add_special_tokens=False
+        )
+        ids_one  = enc_one.input_ids.to(device)      # [1, L]
+        mask_one = enc_one.attention_mask.to(device)  # [1, L]
+        prompt_len = ids_one.shape[1]
+
+        # Compute offsets for this sample (no padding offset needed: batch=1)
+        ss, se, ts = compute_source_offsets(tokenizer, src)
+
+        ctrl.set_context(
+            source_start=ss,
+            source_end=se,
+            target_start=ts,
+            seq_len=prompt_len + max_new_tokens,
+            k=int(k),
+        )
+        ctrl.register_hooks()   # hooks fire on every forward inside generate()
+
+        try:
+            with torch.no_grad():
+                out = model.generate(
+                    input_ids=ids_one,
+                    attention_mask=mask_one,
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    eos_token_id=eos_id,
+                    pad_token_id=pad_id,
+                )
+        finally:
+            ctrl.remove_hooks()  # always clean up, even on error
+
+        gen = out[0, prompt_len:].tolist()
         while gen and gen[-1] in (eos_id, pad_id):
             gen = gen[:-1]
         results.append(tokenizer.decode(gen, skip_special_tokens=True).strip())
+
     return results
 
 
@@ -222,7 +227,7 @@ def main():
             json.dump({
                 "run_name": run_name, "model_path": args.model_path,
                 "split": args.split, "n_samples": args.max_samples,
-                "k_values": ["1","2","4","7","full"],
+                "k_values": ["1","4","7","full"],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }, f, indent=2)
 
@@ -251,11 +256,16 @@ def main():
     os.makedirs(pred_dir, exist_ok=True)
     pred_path = os.path.join(pred_dir, "predictions.jsonl")
 
-    print(f"\nGenerating k={k}  ->  {pred_path}")
-    print(f"batch_size={args.batch_size}  max_new_tokens={args.max_new_tokens}\n")
+    # For wait-k runs, always use batch_size=1 (see generate_batch docstring).
+    # For 'full', use the requested batch_size for throughput.
+    bs = args.batch_size if k == "full" else 1
 
-    bs = args.batch_size
-    n  = len(samples)
+    print(f"\nGenerating k={k}  ->  {pred_path}")
+    print(f"effective_batch_size={bs}  max_new_tokens={args.max_new_tokens}\n")
+    if k != "full":
+        print("  (Wait-k uses batch_size=1 to guarantee correct per-sample masking)\n")
+
+    n = len(samples)
 
     with open(pred_path, "w", encoding="utf-8") as fout:
         for start in range(0, n, bs):

@@ -177,14 +177,17 @@ def compute_latency_metrics(source_len: int, hyp_len: int, k) -> dict:
 
 def score_sacrebleu(hypotheses: list[str], references: list[str]) -> dict:
     import sacrebleu
-    bleu   = sacrebleu.corpus_bleu(hypotheses, [references])
-    chrf   = sacrebleu.corpus_chrf(hypotheses, [references])
-    ter    = sacrebleu.corpus_ter(hypotheses,  [references])
+    bleu    = sacrebleu.corpus_bleu(hypotheses, [references])
+    # chrF++ = chrF with word_order=2 (adds word bigram component).
+    # This is the standard setting for morphologically rich languages like Telugu.
+    # DO NOT use BERTScore.
+    chrfpp  = sacrebleu.corpus_chrf(hypotheses, [references], word_order=2)
+    ter     = sacrebleu.corpus_ter(hypotheses,  [references])
     return {
-        "BLEU":        round(bleu.score, 2),
-        "BLEU_bp":     round(bleu.bp,    4),
-        "chrF":        round(chrf.score, 2),
-        "TER":         round(ter.score,  2),
+        "BLEU":        round(bleu.score,   2),
+        "BLEU_bp":     round(bleu.bp,      4),
+        "chrF++":      round(chrfpp.score,  2),
+        "TER":         round(ter.score,    2),
     }
 
 
@@ -617,7 +620,7 @@ def cmd_score(args):
         all_results[k_tag] = metrics
 
         print(f"    BLEU={metrics.get('BLEU', 'N/A')}  "
-              f"chrF={metrics.get('chrF', 'N/A')}  "
+              f"chrF++={metrics.get('chrF++', 'N/A')}  "
               f"TER={metrics.get('TER', 'N/A')}  "
               f"COMET={metrics.get('COMET_corpus', 'N/A')}  "
               f"AL={metrics.get('AL_mean', 'N/A')}  "
@@ -653,7 +656,7 @@ def cmd_score(args):
 
 def _save_markdown_table(results: dict, manifest: dict, output_dir: str):
     """Save a clean markdown summary table."""
-    cols = ["k", "BLEU", "chrF", "TER", "COMET_corpus",
+    cols = ["k", "BLEU", "chrF++", "TER", "COMET_corpus",
             "AP_mean", "AL_mean", "DAL_mean",
             "length_ratio", "empty_outputs"]
 
@@ -687,7 +690,7 @@ def _save_markdown_table(results: dict, manifest: dict, output_dir: str):
 | Column | Description |
 |:---|:---|
 | BLEU | SacreBLEU corpus score (tokenize=13a) |
-| chrF | Character n-gram F-score (n=6, ÃŽÂ²=2) |
+| chrF++ | chrF with word_order=2 (character + word n-grams, higher = better) |
 | TER | Translation Edit Rate (lower = better) |
 | COMET_corpus | Unbabel/wmt22-comet-da neural metric (higher = better) |
 | AP | Average Proportion Ã¢â‚¬â€ fraction of source read per target token |
@@ -793,13 +796,13 @@ def cmd_compare(args):
     for run_label, run_results in all_runs.items():
         for k_tag, metrics in sorted(run_results.items()):
             rows.append({
-                "run":   run_label,
-                "k":     k_tag,
-                "BLEU":  metrics.get("BLEU"),
-                "chrF":  metrics.get("chrF"),
-                "COMET": metrics.get("COMET_corpus"),
-                "AL":    metrics.get("AL_mean"),
-                "AP":    metrics.get("AP_mean"),
+                "run":    run_label,
+                "k":      k_tag,
+                "BLEU":   metrics.get("BLEU"),
+                "chrF++": metrics.get("chrF++"),
+                "COMET":  metrics.get("COMET_corpus"),
+                "AL":     metrics.get("AL_mean"),
+                "AP":     metrics.get("AP_mean"),
             })
 
     cmp_path = os.path.join(args.output_dir, "comparison.json")
@@ -809,11 +812,11 @@ def cmd_compare(args):
 
     # Print table
     print("\nComparison:")
-    print(f"{'Run':<25} {'k':<6} {'BLEU':>6} {'chrF':>6} {'COMET':>7} {'AL':>6} {'AP':>6}")
+    print(f"{'Run':<25} {'k':<6} {'BLEU':>6} {'chrF++':>7} {'COMET':>7} {'AL':>6} {'AP':>6}")
     print("-" * 70)
     for r in rows:
         print(f"{r['run']:<25} {r['k']:<6} "
-              f"{str(r['BLEU']):>6} {str(r['chrF']):>6} "
+              f"{str(r['BLEU']):>6} {str(r['chrF++']):>7} "
               f"{str(r['COMET']):>7} {str(r['AL']):>6} {str(r['AP']):>6}")
 
 
