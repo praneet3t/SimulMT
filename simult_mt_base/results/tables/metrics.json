@@ -1,0 +1,78 @@
+{
+  "manifest": {
+    "run_name": "20260625_base",
+    "model_path": "sarvamai/sarvam-translate",
+    "split": "test",
+    "n_samples": 100,
+    "k_values": [
+      "2",
+      "4",
+      "7",
+      "full"
+    ],
+    "timestamp": "2026-06-25T17:06:34.576227+00:00"
+  },
+  "scored_at": "2026-06-25T17:27:36.191723+00:00",
+  "results": {
+    "full": {
+      "BLEU": 10.95,
+      "BLEU_bp": 0.9696,
+      "chrF++": 45.16,
+      "TER": 82.06,
+      "avg_hyp_words": 19.15,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.0257,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 1.0,
+      "AL_mean": 31.31,
+      "DAL_mean": 15.9559,
+      "COMET_corpus": 0.8673
+    },
+    "k2": {
+      "BLEU": 2.49,
+      "BLEU_bp": 0.6636,
+      "chrF++": 21.72,
+      "TER": 101.87,
+      "avg_hyp_words": 14.23,
+      "avg_ref_words": 18.67,
+      "length_ratio": 0.7622,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.5923,
+      "AL_mean": 1.5244,
+      "DAL_mean": 3.7663,
+      "COMET_corpus": 0.678
+    },
+    "k4": {
+      "BLEU": 2.79,
+      "BLEU_bp": 0.7231,
+      "chrF++": 23.3,
+      "TER": 102.36,
+      "avg_hyp_words": 15.18,
+      "avg_ref_words": 18.67,
+      "length_ratio": 0.8131,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.6576,
+      "AL_mean": 3.7758,
+      "DAL_mean": 5.1344,
+      "COMET_corpus": 0.6923
+    },
+    "k7": {
+      "BLEU": 3.91,
+      "BLEU_bp": 0.8328,
+      "chrF++": 30.16,
+      "TER": 99.79,
+      "avg_hyp_words": 17.09,
+      "avg_ref_words": 18.67,
+      "length_ratio": 0.9154,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.7584,
+      "AL_mean": 8.3673,
+      "DAL_mean": 7.6002,
+      "COMET_corpus": 0.7473
+    }
+  }
+}

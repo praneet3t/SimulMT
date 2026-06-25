@@ -1,0 +1,13 @@
+{
+  "run_name": "20260625_base",
+  "model_path": "sarvamai/sarvam-translate",
+  "split": "test",
+  "n_samples": 100,
+  "k_values": [
+    "2",
+    "4",
+    "7",
+    "full"
+  ],
+  "timestamp": "2026-06-25T17:06:34.576227+00:00"
+}

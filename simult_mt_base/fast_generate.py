@@ -29,12 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument("--model-path",     default="praneet3/sarvam-translate-waitk-simulmt")
+    p.add_argument("--model-path",     default="sarvamai/sarvam-translate")
     p.add_argument("--k",              required=True,
                    help="Single wait-k value (int or 'full')")
     p.add_argument("--split",          default="test", choices=["test", "val"])
     p.add_argument("--data-dir",       default="simult_mt/data/filtered")
-    p.add_argument("--output-dir",     default="simult_mt/results/predictions")
+    p.add_argument("--output-dir",     default="simult_mt_base/results/predictions")
     p.add_argument("--run-name",       default=None)
     p.add_argument("--max-samples",    type=int, default=100)
     p.add_argument("--batch-size",     type=int, default=8,
