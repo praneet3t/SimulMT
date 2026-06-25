@@ -91,7 +91,10 @@ def build_parser():
     gen.add_argument("--run-name",      default=None,
                      help="Tag for this run (default: auto timestamp)")
     gen.add_argument("--no-comet-gen",  action="store_true",
-                     help="Skip COMET scoring after generation")
+                     help="Skip COMET when auto-scoring after generation")
+    gen.add_argument("--no-score",      action="store_true",
+                     help="Do not score automatically after generation "
+                          "(by default, tables/plots are written to <run_dir>/tables/)")
 
     # -- score ---------------------------------------------------------------
     scr = sub.add_parser("score", help="Load saved predictions, compute all metrics")
@@ -269,6 +272,10 @@ def load_model_for_eval(model_path: str):
     # Determine base model source
     base_model_id = model_path if not is_peft else _get_base_model_name(model_path)
 
+    # CRITICAL: force eager attention. The wait-k hook adds an additive bias to
+    # the model's 4D float attention mask; SDPA / Flash-Attention can take a
+    # causal fast-path that passes attention_mask=None, which would silently drop
+    # the wait-k constraint (making every k produce identical output).
     if cuda_ok:
         bnb_cfg = BitsAndBytesConfig(
             load_in_4bit=True,
@@ -279,12 +286,14 @@ def load_model_for_eval(model_path: str):
             base_model_id,
             quantization_config=bnb_cfg,
             device_map="auto",
+            attn_implementation="eager",
         )
     else:
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_id,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
+            attn_implementation="eager",
         )
 
     if is_peft:
@@ -365,25 +374,26 @@ def generate_one(model, tokenizer, source_text: str, k,
     eos_id = tokenizer.eos_token_id
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
 
-    # Set up wait-k mask controller (same as training)
+    # Set up wait-k mask controller (same hook mechanism as training). The hook
+    # derives the wait-k bias from the live attention-mask shape on every forward,
+    # so it stays correct through the prefill pass and each cached decode step.
     ctrl = WaitKMaskController(model)
 
     if k != "full":
-        # Compute where the source tokens are in the prompt
+        # Compute where the source tokens sit inside the prompt.
         source_start, source_end, target_start = compute_source_offsets(tokenizer, source_text)
-        # total_len covers prompt + max new tokens
-        total_len = prompt_len + max_new_tokens
         ctrl.set_context(
             source_start=source_start,
             source_end=source_end,
             target_start=target_start,
-            seq_len=total_len,
+            seq_len=prompt_len + max_new_tokens,
             k=int(k),
         )
-        ctrl.register_hooks()  # hooks will fire on every forward pass inside generate
+        ctrl.register_hooks()  # hooks fire on every forward pass inside generate()
 
     try:
-        # Standard 2D attention mask — all ones (attend to all prompt tokens)
+        # Standard 2D attention mask — all ones (attend to all prompt tokens).
+        # The model expands this to the 4D causal mask the wait-k hook adds to.
         attn_mask = torch.ones((1, prompt_len), dtype=torch.long, device=device)
 
         with torch.no_grad():
@@ -507,7 +517,21 @@ def cmd_generate(args):
 
     print(f"\nAll predictions saved to: {out_root}")
     print(f"Run name: {run_name}")
-    print(f"\nTo score:\n  python simult_mt/src/eval.py score --predictions-dir {out_root}")
+
+    # Auto-score so a single `generate` call also writes metrics + tables + plot.
+    # Outputs land inside the run directory, keeping each run self-contained.
+    if not args.no_score:
+        from types import SimpleNamespace
+        tables_dir = os.path.join(out_root, "tables")
+        print(f"\nScoring predictions -> {tables_dir}")
+        cmd_score(SimpleNamespace(
+            predictions_dir=out_root,
+            output_dir=tables_dir,
+            no_comet=args.no_comet_gen,
+        ))
+        print(f"\nTables + plot saved to: {tables_dir}")
+    else:
+        print(f"\nTo score:\n  python simult_mt/src/eval.py score --predictions-dir {out_root}")
 
 
 # ---------------------------------------------------------------------------

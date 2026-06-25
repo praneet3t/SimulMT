@@ -119,15 +119,60 @@ class WaitKMaskController:
         return mask
 
     # ------------------------------------------------------------------
+    # Dynamic per-forward bias (works during cached generation)
+    # ------------------------------------------------------------------
+
+    def waitk_bias(self, q_len, kv_len, dtype, device):
+        """
+        Build the additive wait-k bias for ONE forward pass, derived purely from
+        the live attention-mask shape. This is what makes the controller work
+        during generation: it handles both the prefill step (q_len == kv_len) and
+        every KV-cached decode step (q_len == 1, kv_len grows by one each token).
+
+        The query rows of this forward occupy absolute positions
+        [kv_len - q_len, kv_len). A target row at absolute position i (with
+        i >= target_start) may attend to source positions
+        [source_start, source_start + min(k + (i - target_start), S)); everything
+        else in the source span is blocked with -10000.0 (same value used in
+        training). Prompt rows and source rows are left untouched.
+
+        Returns a [q_len, kv_len] tensor that broadcasts over the [B, heads]
+        dims of the model's 4D attention mask.
+        """
+        bias = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
+        if self.current_k == "full":
+            return bias
+
+        ss, se, ts = self.source_start, self.source_end, self.target_start
+        src_len = se - ss
+        if src_len <= 0:
+            return bias
+
+        k       = int(self.current_k)
+        q_pos   = torch.arange(kv_len - q_len, kv_len, device=device)          # [Q]
+        visible = torch.clamp(k + (q_pos - ts), max=src_len)                   # [Q]
+        src_off = torch.arange(src_len, device=device)                        # [S]
+
+        is_target = (q_pos >= ts).unsqueeze(1)                                 # [Q, 1]
+        block     = is_target & (src_off.unsqueeze(0) >= visible.unsqueeze(1)) # [Q, S]
+        bias[:, ss:se] = torch.where(
+            block,
+            torch.full((1,), -10000.0, dtype=dtype, device=device),
+            torch.zeros(1, dtype=dtype, device=device),
+        )
+        return bias
+
+    # ------------------------------------------------------------------
     # Hook management
     # ------------------------------------------------------------------
 
-    def register_hooks(self, batch_mask=None):
+    def register_hooks(self):
         """
-        Register a forward pre-hook on every attention layer.
-
-        batch_mask : optional pre-built [B, 1, L, L] tensor for batched training.
-                     If None, build_mask() is called inside the hook (single-sample).
+        Register a forward pre-hook on every attention layer. The hook reads the
+        model's live 4D attention mask, derives the wait-k bias from its shape via
+        waitk_bias(), and adds it. Because the bias is rebuilt from the actual
+        shape on every forward, this is correct for the prefill pass and for each
+        cached decode step during model.generate().
         """
         self.remove_hooks()
 
@@ -136,64 +181,45 @@ class WaitKMaskController:
             torch.nn.Module.register_forward_pre_hook
         ).parameters
 
-        _batch_mask = [batch_mask]   # mutable cell so hook can read latest value
+        def _apply(attn_mask):
+            # Only act on the 4D float additive mask (eager attention path).
+            if attn_mask is None or attn_mask.ndim != 4:
+                return None
+            bias = self.waitk_bias(
+                attn_mask.shape[-2], attn_mask.shape[-1],
+                attn_mask.dtype, attn_mask.device,
+            )
+            return attn_mask + bias
 
         def hook_with_kwargs(module, args, kwargs):
-            attn_mask = kwargs.get("attention_mask", None)
-            if attn_mask is None and len(args) > 1:
-                attn_mask = args[1]
-
-            if attn_mask is not None:
-                if _batch_mask[0] is not None:
-                    wk = _batch_mask[0].to(device=attn_mask.device, dtype=attn_mask.dtype)
-                else:
-                    wk = self.build_mask().to(device=attn_mask.device, dtype=attn_mask.dtype)
-                    if attn_mask.ndim == 4:
-                        wk = wk.unsqueeze(0).unsqueeze(1)
-                    elif attn_mask.ndim == 3:
-                        wk = wk.unsqueeze(0)
-
-                # Broadcast batch dim if model repeated mask across heads
-                if attn_mask.shape[0] == 1 and wk.shape[0] > 1:
-                    attn_mask = attn_mask.expand(wk.shape[0], -1, -1, -1)
-
-                new_mask = attn_mask + wk
-                if "attention_mask" in kwargs:
-                    kwargs["attention_mask"] = new_mask
-                elif len(args) > 1:
-                    args = (args[0], new_mask) + args[2:]
-
+            if "attention_mask" in kwargs:
+                new = _apply(kwargs["attention_mask"])
+                if new is not None:
+                    kwargs["attention_mask"] = new
+            elif len(args) > 1:
+                new = _apply(args[1])
+                if new is not None:
+                    args = (args[0], new) + args[2:]
             return args, kwargs
 
         def hook_legacy(module, args):
-            if len(args) > 1 and args[1] is not None:
-                attn_mask = args[1]
-                if _batch_mask[0] is not None:
-                    wk = _batch_mask[0].to(device=attn_mask.device, dtype=attn_mask.dtype)
-                else:
-                    wk = self.build_mask().to(device=attn_mask.device, dtype=attn_mask.dtype)
-                    if attn_mask.ndim == 4:
-                        wk = wk.unsqueeze(0).unsqueeze(1)
-                    elif attn_mask.ndim == 3:
-                        wk = wk.unsqueeze(0)
-
-                if attn_mask.shape[0] == 1 and wk.shape[0] > 1:
-                    attn_mask = attn_mask.expand(wk.shape[0], -1, -1, -1)
-
-                new_args = list(args)
-                new_args[1] = attn_mask + wk
-                return tuple(new_args)
+            if len(args) > 1:
+                new = _apply(args[1])
+                if new is not None:
+                    return (args[0], new) + args[2:]
             return args
 
-        for name, module in self.model.named_modules():
-            if "attn" in name.lower() or "Attention" in module.__class__.__name__:
+        # Match the attention MODULES by class name (e.g. "Gemma3Attention"),
+        # not by module path: a path test like "attn" in name also catches
+        # self_attn.q_proj / v_proj (plain Linear layers), wasting hooks.
+        for _, module in self.model.named_modules():
+            cls = module.__class__.__name__.lower()
+            if "attention" in cls or "attn" in cls:
                 if has_with_kwargs:
                     h = module.register_forward_pre_hook(hook_with_kwargs, with_kwargs=True)
                 else:
                     h = module.register_forward_pre_hook(hook_legacy)
                 self.hook_handles.append(h)
-
-        return _batch_mask   # caller can update _batch_mask[0] without re-registering hooks
 
     def remove_hooks(self):
         for h in self.hook_handles:
