@@ -1,0 +1,94 @@
+{
+  "manifest": {
+    "run_name": "20260624_203446",
+    "model_path": "simult_mt/experiments/waitk_static/epoch_1",
+    "split": "test",
+    "n_samples": 1024,
+    "k_values": [
+      "1",
+      "2",
+      "4",
+      "7",
+      "full"
+    ],
+    "timestamp": "2026-06-24T20:34:46.495961+00:00"
+  },
+  "scored_at": "2026-06-25T05:05:45.639364+00:00",
+  "results": {
+    "full": {
+      "BLEU": 17.56,
+      "BLEU_bp": 0.9469,
+      "chrF": 55.27,
+      "TER": 70.64,
+      "avg_hyp_words": 18.29,
+      "avg_ref_words": 19.5,
+      "length_ratio": 0.9378,
+      "empty_outputs": 0,
+      "n_sentences": 1024,
+      "AP_mean": 1.0,
+      "AL_mean": 33.1016,
+      "DAL_mean": 16.8472,
+      "COMET_corpus": 0.8746
+    },
+    "k1": {
+      "BLEU": 17.56,
+      "BLEU_bp": 0.9469,
+      "chrF": 55.27,
+      "TER": 70.64,
+      "avg_hyp_words": 18.29,
+      "avg_ref_words": 19.5,
+      "length_ratio": 0.9378,
+      "empty_outputs": 0,
+      "n_sentences": 1024,
+      "AP_mean": 0.715,
+      "AL_mean": 7.1933,
+      "DAL_mean": 7.0264,
+      "COMET_corpus": 0.8746
+    },
+    "k2": {
+      "BLEU": 17.56,
+      "BLEU_bp": 0.9469,
+      "chrF": 55.27,
+      "TER": 70.64,
+      "avg_hyp_words": 18.29,
+      "avg_ref_words": 19.5,
+      "length_ratio": 0.9378,
+      "empty_outputs": 0,
+      "n_sentences": 1024,
+      "AP_mean": 0.7366,
+      "AL_mean": 7.9894,
+      "DAL_mean": 7.5936,
+      "COMET_corpus": 0.8746
+    },
+    "k4": {
+      "BLEU": 17.56,
+      "BLEU_bp": 0.9469,
+      "chrF": 55.27,
+      "TER": 70.64,
+      "avg_hyp_words": 18.29,
+      "avg_ref_words": 19.5,
+      "length_ratio": 0.9378,
+      "empty_outputs": 0,
+      "n_sentences": 1024,
+      "AP_mean": 0.7763,
+      "AL_mean": 9.5816,
+      "DAL_mean": 8.6609,
+      "COMET_corpus": 0.8746
+    },
+    "k7": {
+      "BLEU": 17.56,
+      "BLEU_bp": 0.9469,
+      "chrF": 55.27,
+      "TER": 70.64,
+      "avg_hyp_words": 18.29,
+      "avg_ref_words": 19.5,
+      "length_ratio": 0.9378,
+      "empty_outputs": 0,
+      "n_sentences": 1024,
+      "AP_mean": 0.8275,
+      "AL_mean": 11.9672,
+      "DAL_mean": 10.0927,
+      "COMET_corpus": 0.8746
+    }
+  }
+}
