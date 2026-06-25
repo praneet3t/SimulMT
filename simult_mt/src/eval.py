@@ -1,24 +1,45 @@
 #!/usr/bin/env python3
 """
-eval.py Ã¢â‚¬â€ Complete evaluation for English Ã¢â€ â€™ Telugu SiMT
+eval.py — Complete evaluation for English → Telugu SiMT
 ========================================================
 
 Two-phase design so you never re-run the model unnecessarily.
 
-  PHASE 1 Ã¢â‚¬â€ Generate predictions (needs GPU + fine-tuned model):
+  PHASE 1 — Generate predictions (needs GPU + fine-tuned model):
+
+    # Using a LOCAL checkpoint directory:
     python simult_mt/src/eval.py generate \\
-        --model-path simult_mt/experiments/waitk_static/epoch_3 \\
+        --model-path simult_mt/experiments/waitk_static/epoch_1 \\
         --k 1 2 4 7 full \\
         --split test \\
         --output-dir simult_mt/results/predictions
 
-  PHASE 2 Ã¢â‚¬â€ Score from saved predictions (CPU, fast, repeatable):
+    # Using a HuggingFace Hub model ID (recommended if model is on HF):
+    python simult_mt/src/eval.py generate \\
+        --model-path YOUR_HF_USERNAME/YOUR_MODEL_REPO \\
+        --k 1 2 4 7 full \\
+        --split test \\
+        --output-dir simult_mt/results/predictions
+
+    NOTE: --model-path accepts both a local directory path AND a
+    HuggingFace Hub model ID (e.g. 'praneet3t/sarvam-waitk-telugu').
+    The script auto-detects which one you are using.
+
+  PHASE 2 — Score from saved predictions (CPU-only, fast, repeatable):
+
+    # Pass the timestamped run directory (the one with k1/, k2/, etc. inside):
     python simult_mt/src/eval.py score \\
-        --predictions-dir simult_mt/results/predictions \\
+        --predictions-dir simult_mt/results/predictions/20260624_203446 \\
         --output-dir simult_mt/results/tables
 
+    # To skip slow COMET download:
+    python simult_mt/src/eval.py score \\
+        --predictions-dir simult_mt/results/predictions/20260624_203446 \\
+        --output-dir simult_mt/results/tables \\
+        --no-comet
+
   Re-score any time with no model needed:
-    python simult_mt/src/eval.py score --predictions-dir ... --output-dir ...
+    python simult_mt/src/eval.py score --predictions-dir <run_dir> --output-dir ...
 
   Compare multiple runs:
     python simult_mt/src/eval.py compare \\
@@ -50,7 +71,10 @@ def build_parser():
     # -- generate ------------------------------------------------------------
     gen = sub.add_parser("generate", help="Run model on test/val set, save predictions")
     gen.add_argument("--model-path",    required=True,
-                     help="Path to fine-tuned LoRA checkpoint (or 'sarvamai/sarvam-translate' for baseline)")
+                     help="Local checkpoint dir OR HuggingFace Hub model ID "
+                          "(e.g. 'praneet3t/sarvam-waitk-telugu'). "
+                          "Auto-detected: if the path does not exist on disk, "
+                          "it is treated as a Hub ID.")
     gen.add_argument("--k",             nargs="+", default=["1", "2", "4", "7", "full"],
                      help="Wait-k values to evaluate (use 'full' for full-attention baseline)")
     gen.add_argument("--split",         default="test",
@@ -59,23 +83,29 @@ def build_parser():
     gen.add_argument("--data-dir",      default="simult_mt/data/filtered")
     gen.add_argument("--output-dir",    default="simult_mt/results/predictions")
     gen.add_argument("--batch-size",    type=int, default=1,
-                     help="Generation batch size (1 recommended for correctness)")
-    gen.add_argument("--max-new-tokens",type=int, default=120)
+                     help="Generation batch size (keep at 1 for correct wait-k masking)")
+    gen.add_argument("--max-new-tokens",type=int, default=200,
+                     help="Maximum new tokens to generate per sentence")
     gen.add_argument("--max-samples",   type=int, default=None,
                      help="Cap number of test samples (default: use all)")
     gen.add_argument("--run-name",      default=None,
                      help="Tag for this run (default: auto timestamp)")
+    gen.add_argument("--no-comet-gen",  action="store_true",
+                     help="Skip COMET scoring after generation")
 
     # -- score ---------------------------------------------------------------
     scr = sub.add_parser("score", help="Load saved predictions, compute all metrics")
-    scr.add_argument("--predictions-dir", required=True)
+    scr.add_argument("--predictions-dir", required=True,
+                     help="Path to a specific run directory that contains k1/, k2/, full/ etc. "
+                          "sub-directories. Example: simult_mt/results/predictions/20260624_203446")
     scr.add_argument("--output-dir",      default="simult_mt/results/tables")
     scr.add_argument("--no-comet",        action="store_true",
                      help="Skip COMET (slow, requires model download)")
 
     # -- compare -------------------------------------------------------------
     cmp = sub.add_parser("compare", help="Compare multiple prediction directories")
-    cmp.add_argument("--dirs",      nargs="+", required=True)
+    cmp.add_argument("--dirs",      nargs="+", required=True,
+                     help="Paths to scored run directories (each must have a metrics.json inside)")
     cmp.add_argument("--labels",    nargs="+", default=None,
                      help="Human-readable labels for each dir (default: dir names)")
     cmp.add_argument("--output-dir",default="simult_mt/results/tables")
@@ -199,13 +229,32 @@ def score_length_stats(hypotheses: list[str], references: list[str]) -> dict:
 # Generation
 # ---------------------------------------------------------------------------
 
+def _is_local_path(model_path: str) -> bool:
+    """Return True if model_path is a local filesystem directory."""
+    return os.path.isdir(model_path)
+
+
 def load_model_for_eval(model_path: str):
     """
     Load the fine-tuned model + tokenizer for inference.
-    If model_path points to a LoRA checkpoint, load with PEFT.
+
+    model_path can be:
+      - A local directory containing a full model checkpoint (merged weights or LoRA adapter)
+      - A HuggingFace Hub model ID (e.g. 'praneet3t/sarvam-waitk-telugu')
+
+    IMPORTANT: We force attn_implementation='eager' to ensure the wait-k
+    attention mask is applied correctly. SDPA and Flash Attention backends
+    bypass hook-based masking and process 4D masks differently.
     """
     from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
     import torch
+
+    is_local = _is_local_path(model_path)
+
+    if is_local:
+        print(f"    Loading from local path: {model_path}")
+    else:
+        print(f"    Loading from HuggingFace Hub: {model_path}")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     if tokenizer.pad_token_id is None:
@@ -213,9 +262,17 @@ def load_model_for_eval(model_path: str):
 
     cuda_ok = torch.cuda.is_available()
 
-    # Check if this is a PEFT checkpoint
-    peft_config_path = os.path.join(model_path, "adapter_config.json")
+    # Check if this is a PEFT/LoRA checkpoint (local only)
+    peft_config_path = os.path.join(model_path, "adapter_config.json") if is_local else ""
     is_peft = os.path.exists(peft_config_path)
+
+    # Determine base model source
+    base_model_id = model_path if not is_peft else _get_base_model_name(model_path)
+
+    # CRITICAL: use eager attention so the 4D wait-k mask is applied correctly.
+    # SDPA / Flash Attention process masks differently and may ignore the explicit
+    # 4D causal+wait-k mask we pass to model.generate().
+    attn_impl = "eager"
 
     if cuda_ok:
         bnb_cfg = BitsAndBytesConfig(
@@ -224,21 +281,23 @@ def load_model_for_eval(model_path: str):
             bnb_4bit_compute_dtype=torch.float16,
         )
         base_model = AutoModelForCausalLM.from_pretrained(
-            model_path if not is_peft else _get_base_model_name(model_path),
+            base_model_id,
             quantization_config=bnb_cfg,
             device_map="auto",
+            attn_implementation=attn_impl,
         )
     else:
         base_model = AutoModelForCausalLM.from_pretrained(
-            model_path if not is_peft else _get_base_model_name(model_path),
+            base_model_id,
             torch_dtype=torch.float32,
             low_cpu_mem_usage=True,
+            attn_implementation=attn_impl,
         )
 
     if is_peft:
         from peft import PeftModel
         model = PeftModel.from_pretrained(base_model, model_path)
-        model = model.merge_and_unload()   # merge LoRA into base for faster inference
+        model = model.merge_and_unload()   # merge LoRA weights into base for faster inference
         print("    LoRA merged into base model for inference.")
     else:
         model = base_model
@@ -248,6 +307,7 @@ def load_model_for_eval(model_path: str):
 
 
 def _get_base_model_name(peft_checkpoint: str) -> str:
+    """Read the base model name from a local PEFT adapter_config.json."""
     cfg_path = os.path.join(peft_checkpoint, "adapter_config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)
@@ -255,7 +315,7 @@ def _get_base_model_name(peft_checkpoint: str) -> str:
 
 
 def format_prompt(tokenizer, source_text: str, tgt_lang: str = "Telugu") -> str:
-    """Format English source into Gemma 3's chat template."""
+    """Format English source into the model's chat template."""
     msgs = [
         {"role": "system", "content": f"Translate the text below to {tgt_lang}."},
         {"role": "user",   "content": source_text},
@@ -263,74 +323,141 @@ def format_prompt(tokenizer, source_text: str, tgt_lang: str = "Telugu") -> str:
     return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
 
-def compute_source_offsets(tokenizer, source_text: str, tgt_lang: str = "Telugu") -> tuple[int, int, int]:
-    """Return (source_start, source_end, target_start) for the wait-k mask."""
+def compute_source_offsets(tokenizer, source_text: str, tgt_lang: str = "Telugu"):
+    """
+    Return (source_start, source_end, target_start) token indices for the wait-k mask.
+
+    - source_start : index of the first source-text token in the full prompt
+    - source_end   : index one past the last source-text token
+    - target_start : index where target generation begins (after the assistant turn opener)
+    """
     sys_only = [{"role": "system", "content": f"Translate the text below to {tgt_lang}."}]
     with_src  = [
         {"role": "system", "content": f"Translate the text below to {tgt_lang}."},
         {"role": "user",   "content": source_text},
     ]
 
-    prompt_only_str = tokenizer.apply_chat_template(sys_only,     tokenize=False, add_generation_prompt=False)
-    prompt_src_str  = tokenizer.apply_chat_template(with_src,     tokenize=False, add_generation_prompt=False)
-    prompt_sep_str  = tokenizer.apply_chat_template(with_src,     tokenize=False, add_generation_prompt=True)
+    prompt_only_str = tokenizer.apply_chat_template(sys_only,  tokenize=False, add_generation_prompt=False)
+    prompt_src_str  = tokenizer.apply_chat_template(with_src,  tokenize=False, add_generation_prompt=False)
+    prompt_full_str = tokenizer.apply_chat_template(with_src,  tokenize=False, add_generation_prompt=True)
 
-    enc = lambda s: tokenizer.encode(s, add_special_tokens=False)
-    return len(enc(prompt_only_str)), len(enc(prompt_src_str)), len(enc(prompt_sep_str))
+    enc = lambda s: len(tokenizer.encode(s, add_special_tokens=False))
+    return enc(prompt_only_str), enc(prompt_src_str), enc(prompt_full_str)
 
 
-def generate_one(model, tokenizer, source_text: str, k,
-                 max_new_tokens: int = 120, device: str = "cuda") -> str:
+def _build_waitk_4d_mask(
+    source_start: int,
+    source_end:   int,
+    target_start: int,
+    prompt_len:   int,
+    max_new_tokens: int,
+    k,
+    dtype,
+    device,
+):
     """
-    Generate a Telugu translation with wait-k attention masking.
-    Single-sample autoregressive generation.
+    Build a full causal + wait-k 4D attention mask for use with model.generate().
+
+    Shape: [1, 1, total_len, total_len] where total_len = prompt_len + max_new_tokens.
+
+    The mask encodes:
+      1. Standard causal masking (lower-triangular)
+      2. Wait-k constraint: target token t (0-indexed from target_start) can only
+         attend to source tokens [source_start .. source_start + min(k+t, src_len) - 1]
+
+    This mask is passed directly to model.generate() as the attention_mask argument,
+    bypassing any internal 2D-to-4D conversion that would strip our wait-k constraint.
     """
     import torch
 
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from train import build_batch_waitk_mask, register_waitk_hooks, remove_hooks
+    total = prompt_len + max_new_tokens
+    src_len = source_end - source_start
+
+    # Build standard causal mask: lower-triangular = 0 (attend), upper = NEG_INF (block)
+    NEG_INF = torch.finfo(dtype).min / 2
+    # Create indices for vectorized causal mask
+    rows = torch.arange(total, device=device).unsqueeze(1)   # [total, 1]
+    cols = torch.arange(total, device=device).unsqueeze(0)   # [1, total]
+    causal = torch.where(cols <= rows,
+                         torch.zeros(1, dtype=dtype, device=device),
+                         torch.full((1,), NEG_INF, dtype=dtype, device=device))
+    mask = causal  # [total, total]
+
+    if k != "full" and src_len > 0:
+        k_int = int(k)
+        # t_indices: 0-indexed target steps for rows [target_start .. target_start+max_new_tokens-1]
+        t_range = torch.arange(max_new_tokens, device=device)          # [max_new_tokens]
+        row_range = (target_start + t_range)                            # [max_new_tokens]
+        # visible source tokens for each target step: min(k + t, src_len)
+        visible = torch.clamp(k_int + t_range, max=src_len)            # [max_new_tokens]
+        # source column indices relative to source_start
+        src_cols = torch.arange(src_len, device=device)                # [src_len]
+        # should_block[t, s] = src_col s >= visible[t]  =>  block that source position
+        should_block = src_cols.unsqueeze(0) >= visible.unsqueeze(1)   # [max_new_tokens, src_len]
+        # Apply to the mask for valid rows only
+        valid = row_range < total
+        for i, (row, blk) in enumerate(zip(row_range.tolist(), should_block)):
+            if not valid[i]:
+                break
+            mask[int(row), source_start:source_end][blk] = NEG_INF
+
+    return mask.unsqueeze(0).unsqueeze(0)  # [1, 1, total, total]
+
+
+def generate_one(model, tokenizer, source_text: str, k,
+                 max_new_tokens: int = 200, device: str = "cuda") -> str:
+    """
+    Generate a Telugu translation enforcing the wait-k policy.
+
+    Key design decisions:
+    - Uses model.generate() (NOT a manual token loop) for correctness and speed.
+    - Passes a pre-built 4D causal+wait-k attention mask directly, bypassing
+      HuggingFace's internal 2D-to-4D conversion which would drop the constraint.
+    - Uses use_cache=False so the full mask is applied at every step consistently.
+    - Requires attn_implementation='eager' in the loaded model (set in load_model_for_eval)
+      because SDPA/Flash Attention ignore explicit 4D masks.
+    """
+    import torch
 
     prompt_str = format_prompt(tokenizer, source_text)
     source_start, source_end, target_start = compute_source_offsets(tokenizer, source_text)
 
-    input_ids = tokenizer.encode(prompt_str, add_special_tokens=False, return_tensors="pt")
-    input_ids = input_ids.to(device)
+    prompt_ids = tokenizer.encode(prompt_str, add_special_tokens=False, return_tensors="pt")
+    prompt_ids = prompt_ids.to(device)
+    prompt_len = prompt_ids.shape[1]
+    dtype      = next(model.parameters()).dtype
 
-    eos_id    = tokenizer.eos_token_id
-    generated = input_ids
-    dtype     = torch.float16 if device != "cpu" else torch.float32
+    # Build the full 4D mask upfront covering [prompt + max_new_tokens] positions
+    mask_4d = _build_waitk_4d_mask(
+        source_start=source_start,
+        source_end=source_end,
+        target_start=target_start,
+        prompt_len=prompt_len,
+        max_new_tokens=max_new_tokens,
+        k=k,
+        dtype=dtype,
+        device=device,
+    )  # [1, 1, total, total]
 
-    mask_cell = [None]
+    eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id or eos_id
 
     with torch.no_grad():
-        for step in range(max_new_tokens):
-            seq_len      = generated.shape[1]
-            target_step  = seq_len - target_start   # how many target tokens written so far
+        output_ids = model.generate(
+            input_ids=prompt_ids,
+            attention_mask=mask_4d,          # 4D mask — bypasses internal conversion
+            max_new_tokens=max_new_tokens,
+            do_sample=False,                 # greedy
+            eos_token_id=eos_id,
+            pad_token_id=pad_id,
+            use_cache=False,                 # must be False when supplying a 4D mask
+        )
 
-            mask_cell[0] = build_batch_waitk_mask(
-                source_starts=[source_start],
-                source_ends=[source_end],
-                target_starts=[target_start],
-                seq_len=seq_len,
-                k=k if k != "full" else seq_len,
-                dtype=dtype,
-                device=device,
-            )
-            handles = register_waitk_hooks(model, mask_cell)
-
-            attn_mask = torch.ones(1, seq_len, dtype=torch.long, device=device)
-            try:
-                out = model(input_ids=generated, attention_mask=attn_mask)
-            finally:
-                remove_hooks(handles)
-                mask_cell[0] = None
-
-            next_token = out.logits[:, -1, :].argmax(dim=-1)
-            if next_token.item() == eos_id:
-                break
-            generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
-
-    gen_tokens = generated[0, target_start:].tolist()
+    # Decode only the newly generated tokens (after the prompt)
+    gen_tokens = output_ids[0, prompt_len:].tolist()
+    # Strip EOS if present
+    if gen_tokens and gen_tokens[-1] == eos_id:
+        gen_tokens = gen_tokens[:-1]
     return tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
 
 
