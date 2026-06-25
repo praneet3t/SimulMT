@@ -3,7 +3,10 @@ simt_env/
 
 # Logs
 screenlog.0
+screenlog*.txt
+screenlog*
 *.log
+
 
 # Python cache and temporary files
 __pycache__/
