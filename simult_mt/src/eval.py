@@ -8,17 +8,17 @@ Two-phase design so you never re-run the model unnecessarily.
   PHASE 1 — Generate predictions (needs GPU + fine-tuned model):
 
     # Using a LOCAL checkpoint directory:
-    python simult_mt/src/eval.py generate \\
-        --model-path simult_mt/experiments/waitk_static/epoch_1 \\
-        --k 1 2 4 7 full \\
-        --split test \\
+    python simult_mt/src/eval.py generate \
+        --model-path simult_mt/experiments/waitk_static/epoch_1 \
+        --k 2 4 7 full \
+        --split test \
         --output-dir simult_mt/results/predictions
 
     # Using a HuggingFace Hub model ID (recommended if model is on HF):
-    python simult_mt/src/eval.py generate \\
-        --model-path YOUR_HF_USERNAME/YOUR_MODEL_REPO \\
-        --k 1 2 4 7 full \\
-        --split test \\
+    python simult_mt/src/eval.py generate \
+        --model-path YOUR_HF_USERNAME/YOUR_MODEL_REPO \
+        --k 2 4 7 full \
+        --split test \
         --output-dir simult_mt/results/predictions
 
     NOTE: --model-path accepts both a local directory path AND a
@@ -75,7 +75,7 @@ def build_parser():
                           "(e.g. 'praneet3t/sarvam-waitk-telugu'). "
                           "Auto-detected: if the path does not exist on disk, "
                           "it is treated as a Hub ID.")
-    gen.add_argument("--k",             nargs="+", default=["1", "2", "4", "7", "full"],
+    gen.add_argument("--k",             nargs="+", default=["2", "4", "7", "full"],
                      help="Wait-k values to evaluate (use 'full' for full-attention baseline)")
     gen.add_argument("--split",         default="test",
                      choices=["test", "val"],
@@ -99,8 +99,8 @@ def build_parser():
     # -- score ---------------------------------------------------------------
     scr = sub.add_parser("score", help="Load saved predictions, compute all metrics")
     scr.add_argument("--predictions-dir", required=True,
-                     help="Path to a specific run directory that contains k1/, k2/, full/ etc. "
-                          "sub-directories. Example: simult_mt/results/predictions/20260624_203446")
+                      help="Path to a specific run directory that contains k2/, k4/, full/ etc. "
+                           "sub-directories. Example: simult_mt/results/predictions/20260624_203446")
     scr.add_argument("--output-dir",      default="simult_mt/results/tables")
     scr.add_argument("--no-comet",        action="store_true",
                      help="Skip COMET (slow, requires model download)")

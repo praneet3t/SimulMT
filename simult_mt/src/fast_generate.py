@@ -8,11 +8,11 @@ Key speedups over the original eval.py:
   3. Batched generation for the 'full' baseline; single-sample loop for wait-k
      (batching wait-k requires per-sample hooks — see note in generate_batch)
   4. Each script invocation handles a single k-value so you can
-     run k=1,4,7,full in parallel in separate screen windows.
+     run k=2,4,7,full in parallel in separate screen windows.
 
 Usage — pick a shared RUN_NAME for all k-windows, e.g. 20260625_v2:
   source ~/simt_env/bin/activate && cd ~/SimulMT
-  python simult_mt/src/fast_generate.py --k 1    --run-name 20260625_v2
+  python simult_mt/src/fast_generate.py --k 2    --run-name 20260625_v2
   python simult_mt/src/fast_generate.py --k 4    --run-name 20260625_v2
   python simult_mt/src/fast_generate.py --k 7    --run-name 20260625_v2
   python simult_mt/src/fast_generate.py --k full --run-name 20260625_v2
@@ -227,7 +227,7 @@ def main():
             json.dump({
                 "run_name": run_name, "model_path": args.model_path,
                 "split": args.split, "n_samples": args.max_samples,
-                "k_values": ["1","4","7","full"],
+                "k_values": ["2","4","7","full"],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }, f, indent=2)
 
