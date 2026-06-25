@@ -1,0 +1,89 @@
+{
+  "manifest": {
+    "run_name": "20260625_fast",
+    "model_path": "praneet3/sarvam-translate-waitk-simulmt",
+    "split": "test",
+    "n_samples": 100,
+    "k_values": [
+      "1",
+      "2",
+      "4",
+      "7",
+      "full"
+    ],
+    "timestamp": "2026-06-25T10:39:40.993961+00:00"
+  },
+  "scored_at": "2026-06-25T10:52:58.586408+00:00",
+  "results": {
+    "full": {
+      "BLEU": 8.22,
+      "BLEU_bp": 1.0,
+      "chrF": 35.85,
+      "TER": 114.41,
+      "avg_hyp_words": 24.46,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.3101,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 1.0,
+      "AL_mean": 31.31,
+      "DAL_mean": 15.9926
+    },
+    "k1": {
+      "BLEU": 8.22,
+      "BLEU_bp": 1.0,
+      "chrF": 35.85,
+      "TER": 114.41,
+      "avg_hyp_words": 24.46,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.3101,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.6759,
+      "AL_mean": 5.4612,
+      "DAL_mean": 5.3651
+    },
+    "k2": {
+      "BLEU": 8.22,
+      "BLEU_bp": 1.0,
+      "chrF": 35.85,
+      "TER": 114.41,
+      "avg_hyp_words": 24.46,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.3101,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.7006,
+      "AL_mean": 6.2948,
+      "DAL_mean": 5.9739
+    },
+    "k4": {
+      "BLEU": 8.22,
+      "BLEU_bp": 1.0,
+      "chrF": 35.85,
+      "TER": 114.41,
+      "avg_hyp_words": 24.46,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.3101,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.7466,
+      "AL_mean": 7.9625,
+      "DAL_mean": 7.1556
+    },
+    "k7": {
+      "BLEU": 8.22,
+      "BLEU_bp": 1.0,
+      "chrF": 35.85,
+      "TER": 114.41,
+      "avg_hyp_words": 24.46,
+      "avg_ref_words": 18.67,
+      "length_ratio": 1.3101,
+      "empty_outputs": 0,
+      "n_sentences": 100,
+      "AP_mean": 0.8066,
+      "AL_mean": 10.4684,
+      "DAL_mean": 8.7825
+    }
+  }
+}

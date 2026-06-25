@@ -28,7 +28,7 @@ simult_mt/experiments/
 *.safetensors
 
 # Evaluation results and plots
-simult_mt/results/
+#simult_mt/results/
 
 # Live logs
 simult_mt/src/simt_live_log.txt
